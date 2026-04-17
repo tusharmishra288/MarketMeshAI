@@ -1,0 +1,86 @@
+version: '3.8'
+
+# StockPilot AI — Docker Compose
+#
+# Architecture:
+#   redis        — hot cache for quote/fundamental data
+#   orchestrator — FastAPI backend; spawns the 4 MCP servers as stdio subprocesses
+#   frontend     — Streamlit UI
+#
+# Note: MCP servers (americas, europe, asia_pacific, mena) are NOT separate
+# containers. They are Python subprocesses launched by the orchestrator at
+# startup via the MCP stdio protocol. Their code lives inside the orchestrator
+# image at /app/mcp_servers/.
+
+services:
+
+  # ── Redis cache (optional — app degrades gracefully without it) ─────────────
+  redis:
+    image: redis:7-alpine
+    container_name: globalstock_redis
+    command: redis-server --maxmemory 512mb --maxmemory-policy allkeys-lru
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - stocknet
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── FastAPI orchestrator + MCP servers (all in one image) ──────────────────
+  orchestrator:
+    build:
+      context: .                      # project root — lets us COPY requirements.txt + mcp_servers/
+      dockerfile: backend/Dockerfile
+    container_name: globalstock_orchestrator
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      # Override .env values that differ inside Docker
+      - REDIS_HOST=redis
+      - BACKEND_HOST=0.0.0.0
+      - BACKEND_PORT=8000
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - stocknet
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 10s
+      start_period: 90s   # MCP servers need time to initialise
+      retries: 5
+
+  # ── Streamlit frontend ──────────────────────────────────────────────────────
+  frontend:
+    build:
+      context: .                       # project root — lets us COPY requirements.txt
+      dockerfile: frontend/Dockerfile
+    container_name: globalstock_frontend
+    ports:
+      - "8501:8501"
+    environment:
+      - BACKEND_URL=http://orchestrator:8000
+    depends_on:
+      orchestrator:
+        condition: service_healthy
+    networks:
+      - stocknet
+    restart: unless-stopped
+
+volumes:
+  redis_data:
+
+networks:
+  stocknet:
+    driver: bridge
