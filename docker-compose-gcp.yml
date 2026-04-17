@@ -1,5 +1,3 @@
-version: '3.8'
-
 # MarketMesh AI — GCP e2-micro optimised compose (cloud deployment)
 #
 # Differences from docker-compose.yml:
@@ -54,7 +52,7 @@ services:
       - BACKEND_URL=http://orchestrator:8000
     depends_on:
       orchestrator:
-        condition: service_healthy
+        condition: service_started
     networks: [appnet]
     restart: unless-stopped
     mem_limit: 250m

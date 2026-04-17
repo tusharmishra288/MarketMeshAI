@@ -173,20 +173,36 @@ jobs:
                # Group change takes effect on next login; use sudo for this session.
                sudo usermod -aG docker \"\$(whoami)\" 2>/dev/null || true
 
-               # ── Build and start containers ────────────────────────────────
-               # --progress=plain streams layer-by-layer output so the SSH
-               # connection stays active during long builds on e2-micro.
-               sudo docker compose -f docker-compose-gcp.yml build --progress=plain
-               sudo docker compose -f docker-compose-gcp.yml up -d
+               # ── Prune old images/cache to free disk space ─────────────────
+               sudo docker system prune -f
+               echo 'Disk after prune:' && df -h /
 
-               # ── Wait for orchestrator to become healthy ───────────────────
-               echo 'Waiting for orchestrator health (up to 3 min)...'
-               for i in \$(seq 1 18); do
+               # ── Build containers ──────────────────────────────────────────
+               # --progress=plain is a global compose flag (must come before -f).
+               # Streams layer output so SSH stays alive on slow e2-micro builds.
+               sudo docker compose --progress=plain -f docker-compose-gcp.yml build
+
+               # ── Start orchestrator only ───────────────────────────────────
+               # Frontend depends_on is service_started so compose up won't block
+               # on the health check; we manage that ourselves below.
+               sudo docker compose -f docker-compose-gcp.yml up -d orchestrator
+
+               # ── Wait for orchestrator to become healthy (up to 6 min) ─────
+               echo 'Waiting for orchestrator health...'
+               for i in \$(seq 1 36); do
                  STATUS=\$(sudo docker inspect --format='{{.State.Health.Status}}' marketmesh_orchestrator 2>/dev/null || echo 'starting')
-                 echo \"  [\$i/18] \$STATUS\"
-                 [ \"\$STATUS\" = 'healthy' ] && break
+                 echo \"  [\$i/36] \$STATUS\"
+                 if [ \"\$STATUS\" = 'healthy' ]; then break; fi
+                 if [ \"\$STATUS\" = 'unhealthy' ]; then
+                   echo '--- orchestrator logs (last 80 lines) ---'
+                   sudo docker logs --tail=80 marketmesh_orchestrator
+                   exit 1
+                 fi
                  sleep 10
                done
+
+               # ── Start frontend (orchestrator already healthy) ──────────────
+               sudo docker compose -f docker-compose-gcp.yml up -d frontend
 
                sudo docker compose -f docker-compose-gcp.yml ps
                echo '=== Deploy complete: '$(date)' ==='"
