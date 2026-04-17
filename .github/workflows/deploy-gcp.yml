@@ -133,6 +133,7 @@ jobs:
           ssh -i ~/.ssh/marketmesh_gcp \
               -o StrictHostKeyChecking=no \
               -o ServerAliveInterval=30 \
+              -o ServerAliveCountMax=60 \
               marketmesh@${{ steps.vm_ip.outputs.ip }} \
               "set -euo pipefail
                echo '=== MarketMesh AI deploy: '$(date)' ==='
@@ -173,7 +174,9 @@ jobs:
                sudo usermod -aG docker \"\$(whoami)\" 2>/dev/null || true
 
                # ── Build and start containers ────────────────────────────────
-               sudo docker compose -f docker-compose-gcp.yml build --quiet
+               # --progress=plain streams layer-by-layer output so the SSH
+               # connection stays active during long builds on e2-micro.
+               sudo docker compose -f docker-compose-gcp.yml build --progress=plain
                sudo docker compose -f docker-compose-gcp.yml up -d
 
                # ── Wait for orchestrator to become healthy ───────────────────
@@ -187,7 +190,7 @@ jobs:
 
                sudo docker compose -f docker-compose-gcp.yml ps
                echo '=== Deploy complete: '$(date)' ==='"
-        timeout-minutes: 20
+        timeout-minutes: 40
 
       # ── Step 3: Health check from Actions runner ──────────────────────────
       - name: Health check
