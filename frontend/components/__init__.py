@@ -1,1 +1,1 @@
-# StockPilot AI — reusable UI components
+# MarketMesh AI — reusable UI components

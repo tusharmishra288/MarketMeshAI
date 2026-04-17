@@ -1,5 +1,5 @@
 """
-StockPilot AI — Cache Helpers (2-tier caching strategy).
+MarketMesh AI — Cache Helpers (2-tier caching strategy).
 
 This module implements the L1 (in-process) layer of a 2-tier cache:
 

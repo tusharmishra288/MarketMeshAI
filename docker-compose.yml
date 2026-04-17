@@ -1,6 +1,6 @@
 version: '3.8'
 
-# StockPilot AI — Docker Compose
+# MarketMesh AI — Docker Compose
 #
 # Architecture:
 #   redis        — hot cache for quote/fundamental data

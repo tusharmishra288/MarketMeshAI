@@ -1,5 +1,5 @@
 """
-StockPilot AI — Enrichment (Alpha Vantage pipeline, factor scoring, sentiment).
+MarketMesh AI — Enrichment (Alpha Vantage pipeline, factor scoring, sentiment).
 
 This module runs after a raw fundamentals dict has been fetched from an MCP
 server, supplementing it with additional data and derived scores.

@@ -1,5 +1,5 @@
 """
-StockPilot AI — AI Helpers (dual-LLM strategy for company analysis).
+MarketMesh AI — AI Helpers (dual-LLM strategy for company analysis).
 
 This module implements a dual-LLM fallback chain used across the ``/api/ai/*``
 endpoints. Every LLM call attempts Groq first (lower latency, free tier) and

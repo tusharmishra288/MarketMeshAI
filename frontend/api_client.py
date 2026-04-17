@@ -1,5 +1,5 @@
 """
-StockPilot AI — Centralised API client for the FastAPI backend.
+MarketMesh AI — Centralised API client for the FastAPI backend.
 
 All HTTP calls to the backend originate from this module.
 Pages import individual fetch functions; no page should call ``requests``

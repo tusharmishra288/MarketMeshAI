@@ -1,5 +1,5 @@
 """
-StockPilot AI — Orchestrator (FastAPI Entry Point).
+MarketMesh AI — Orchestrator (FastAPI Entry Point).
 
 This module is the single entry-point for the backend service. It creates the
 FastAPI application, bootstraps all six regional/analytical MCP servers as
@@ -121,7 +121,7 @@ async def lifespan(app: FastAPI):
 # ── App ───────────────────────────────────────────────────────────────────────
 
 app = FastAPI(
-    title="StockPilot AI Orchestrator",
+    title="MarketMesh AI Orchestrator",
     description="Multi-Region Stock Intelligence API — 6 MCP servers, AI analysis, technical indicators",
     version="3.0.0",
     lifespan=lifespan,

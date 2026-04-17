@@ -1,5 +1,5 @@
 """
-StockPilot AI — Global Overview.
+MarketMesh AI — Global Overview.
 
 Real-time view of all 31 exchanges across 4 global regions, cross-market
 correlations, and US sector ETF performance. Data is fetched from all 5 MCP

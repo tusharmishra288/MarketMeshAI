@@ -1,5 +1,5 @@
 """
-StockPilot AI — Shared utilities for the frontend.
+MarketMesh AI — Shared utilities for the frontend.
 
 Single source of truth for exchange/currency maps, price formatters,
 and timezone-aware market-hours helpers used across all pages.

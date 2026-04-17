@@ -1,5 +1,5 @@
 """
-StockPilot AI — Stock Charts.
+MarketMesh AI — Stock Charts.
 
 Interactive price-history and technical-analysis page powered entirely by the
 Analytics MCP Server (yfinance + ``ta`` library). Renders a candlestick chart

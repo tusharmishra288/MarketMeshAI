@@ -1,5 +1,5 @@
 """
-StockPilot AI — Market Dashboard.
+MarketMesh AI — Market Dashboard.
 
 The main landing page of the application. Displays a real-time market status
 strip across all 4 global regions, a quick stock quote lookup with 30-second

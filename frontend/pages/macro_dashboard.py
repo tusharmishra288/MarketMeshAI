@@ -1,5 +1,5 @@
 """
-StockPilot AI — Macro Dashboard.
+MarketMesh AI — Macro Dashboard.
 
 US macroeconomic environment page powered by the Economics MCP Server (FRED)
 and AI narrative generation (Groq / Gemini). Displays the full suite of FRED

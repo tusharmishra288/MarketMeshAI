@@ -1,5 +1,5 @@
 """
-StockPilot AI — User Data Routes (watchlist and price-alert CRUD).
+MarketMesh AI — User Data Routes (watchlist and price-alert CRUD).
 
 This router exposes REST endpoints for persisted user data stored in the
 application database (SQLite in development, PostgreSQL in production).

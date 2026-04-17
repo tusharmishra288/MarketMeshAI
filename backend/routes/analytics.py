@@ -1,5 +1,5 @@
 """
-StockPilot AI — Analytics Routes.
+MarketMesh AI — Analytics Routes.
 
 This router exposes quantitative analytics endpoints that delegate computation
 to the analytics MCP server (``mcp_servers/analytics/server.py``). All

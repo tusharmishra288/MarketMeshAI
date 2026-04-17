@@ -1,4 +1,4 @@
-# StockPilot AI
+# MarketMesh AI
 
 > Production-grade, multi-region stock intelligence platform powered by MCP agents, XGBoost ML, and dual-LLM AI analysis across 31 global exchanges.
 
@@ -9,25 +9,27 @@
 
 ---
 
-## Why "StockPilot AI"?
+## Why "MarketMesh AI"?
 
-The name is built from three words that each describe a core principle of the platform:
+The name is built from two words and a suffix that each reflect a core principle of the platform:
 
-**Stock** — The subject matter is global equity markets: shares, indices, fundamentals, and the macroeconomic forces that drive them. The platform covers 31 exchanges across 26 countries, from NASDAQ and NYSE to NSE, TSE, LSE, and Tadawul — treating the entire world of publicly listed companies as a single, navigable space.
+**Market** — The scope is the entire global equity market: real-time quotes, company fundamentals, sector performance, cross-market correlations, and macroeconomic context — all in one place. The platform spans 31 exchanges across 26 countries, from NASDAQ and NYSE to NSE, TSE, LSE, and Tadawul, treating every publicly listed company worldwide as part of a single, unified market.
 
-**Pilot** — A pilot does not fly blind. They rely on a cockpit of instruments — altitude, airspeed, heading, fuel — to make confident decisions under uncertainty. StockPilot AI gives investors an equivalent instrument panel: real-time quotes, technical indicators (RSI, MACD, Bollinger Bands), factor exposure scores, anomaly alerts, macroeconomic dashboards, and cross-market correlation heatmaps. Just as a pilot's instruments remove guesswork from navigation, these tools remove guesswork from investment research.
+**Mesh** — A mesh is an interconnected network where every node is linked to every other. This perfectly describes both the platform's architecture and its analytical approach:
 
-The word "Pilot" also reflects the platform's MCP (Model Context Protocol) architecture. Each of the six AI agents is a specialist co-pilot — Americas, Europe, Asia-Pacific, MENA, Analytics, Economics — each with its own instruments and domain expertise. The FastAPI orchestrator acts as the flight management system, routing requests to the right co-pilot and synthesising their responses into a coherent output.
+- **Architecturally**, six MCP (Model Context Protocol) agent servers — Americas, Europe, Asia-Pacific, MENA, Analytics, and Economics — form a mesh of specialised intelligence nodes. The FastAPI orchestrator weaves their outputs together into a single, coherent API response. No single source or server is a bottleneck; each enriches the others.
+- **Analytically**, the platform cross-links data streams that are normally siloed: live prices are correlated with macroeconomic indicators, company fundamentals are scored against sector peers, news sentiment is aggregated alongside technical momentum signals, and yield curves are interpreted alongside GDP and inflation trends. The result is a mesh of insight — every data point connected to every other.
+- **Coverage-wise**, the cross-market correlation heatmap literally visualises the mesh — showing how 31 exchanges move in relation to each other, and classifying the global market regime (Risk-On, Risk-Off, or Rotation) from that interconnected signal.
 
-**AI** — Artificial intelligence is woven into every layer: Groq and Gemini LLMs generate company outlooks and macro narratives in plain English, XGBoost predicts next-day price direction with SHAP explainability, IsolationForest flags statistically unusual price and volume events, and a four-factor model scores each stock on Value, Momentum, Quality, and Low-Volatility. AI is not a feature bolted on — it is the analytical engine that transforms raw market data into actionable intelligence.
+**AI** — Artificial intelligence runs through every layer: Groq and Gemini LLMs translate raw data into plain-English company outlooks and macro narratives, XGBoost predicts next-day price direction with SHAP explainability, IsolationForest detects statistically unusual price and volume events, and a four-factor model (Value, Momentum, Quality, Low-Volatility) scores each stock against its sector peers. AI is not a feature bolted on — it is the analytical engine that turns the mesh of raw market data into actionable intelligence.
 
-> In short: **StockPilot AI** is the cockpit that lets you pilot your investment research across the entire global market — with AI as your co-pilot.
+> In short: **MarketMesh AI** weaves together 31 global exchanges, 6 AI agents, and 5 data providers into a single, interconnected intelligence platform — where every market signal is connected, every data point is enriched, and every decision is informed.
 
 ---
 
 ## Overview
 
-StockPilot AI is a production-grade stock market intelligence platform that aggregates real-time and end-of-day data from 31 exchanges across 26 countries, enriches it with AI-powered analysis, machine learning predictions, and macroeconomic context, and presents everything through a clean Streamlit interface.
+MarketMesh AI is a production-grade stock market intelligence platform that aggregates real-time and end-of-day data from 31 exchanges across 26 countries, enriches it with AI-powered analysis, machine learning predictions, and macroeconomic context, and presents everything through a clean Streamlit interface.
 
 The platform is built on the **Model Context Protocol (MCP)** — a standard for structured, tool-calling AI agents. Six MCP servers run as managed stdio subprocesses under a central FastAPI orchestrator. Each server owns a domain: four cover regional equity markets (Americas, Europe, Asia-Pacific, MENA), one handles technical analysis and ML inference, and one connects to the Federal Reserve's FRED API for macroeconomic data. The orchestrator routes requests to the appropriate server, applies 2-tier caching, and exposes a unified REST API consumed by the frontend.
 
@@ -106,7 +108,7 @@ All MCP servers run as **stdio subprocesses** managed by the orchestrator at sta
 ## Project Structure
 
 ```
-stockpilot-ai/
+marketmesh-ai/
 ├── backend/
 │   ├── orchestrator.py          # FastAPI app entry point + MCP lifespan
 │   ├── helpers/
@@ -167,8 +169,8 @@ stockpilot-ai/
 
 ```bash
 # 1. Clone the repository
-git clone https://github.com/your-username/stockpilot-ai.git
-cd stockpilot-ai
+git clone https://github.com/your-username/marketmesh-ai.git
+cd marketmesh-ai
 
 # 2. Create and activate virtual environment
 python -m venv venv
@@ -335,7 +337,7 @@ Data quality is scored per-source by `backend/services/validator.py` and exposed
 
 ## Caching Strategy
 
-StockPilot AI uses a two-tier cache to minimise API calls against free-tier rate limits.
+MarketMesh AI uses a two-tier cache to minimise API calls against free-tier rate limits.
 
 **L1 — In-memory (always active)**
 
@@ -460,7 +462,7 @@ This project is licensed under the **MIT License**.
 ```
 MIT License
 
-Copyright (c) 2025 StockPilot AI Contributors
+Copyright (c) 2025 MarketMesh AI Contributors
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -483,4 +485,4 @@ SOFTWARE.
 
 ---
 
-> **Disclaimer**: StockPilot AI is an educational and research tool. Nothing in this software constitutes financial advice. Always consult a qualified financial professional before making investment decisions.
+> **Disclaimer**: MarketMesh AI is an educational and research tool. Nothing in this software constitutes financial advice. Always consult a qualified financial professional before making investment decisions.

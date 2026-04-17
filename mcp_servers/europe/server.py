@@ -1,5 +1,5 @@
 """
-StockPilot AI — Europe MCP Server.
+MarketMesh AI — Europe MCP Server.
 
 This MCP server handles all market-data requests for European exchanges. It
 runs as a standalone subprocess communicating over stdio, managed by the

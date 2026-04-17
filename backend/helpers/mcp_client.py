@@ -1,5 +1,5 @@
 """
-StockPilot AI — MCP Client (stdio transport, session pool, dispatcher).
+MarketMesh AI — MCP Client (stdio transport, session pool, dispatcher).
 
 This module manages the lifecycle of all MCP server connections and provides
 the single ``mcp_call()`` dispatcher used by every route handler. Each MCP

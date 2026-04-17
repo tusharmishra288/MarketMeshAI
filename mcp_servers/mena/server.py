@@ -1,5 +1,5 @@
 """
-StockPilot AI — MENA MCP Server.
+MarketMesh AI — MENA MCP Server.
 
 This MCP server handles all market-data requests for Middle East and North
 Africa (MENA) exchanges. It runs as a standalone subprocess communicating over

@@ -1,5 +1,5 @@
 """
-Backend services package for StockPilot AI
+Backend services package for MarketMesh AI
 Contains core services: validator, cache_manager, rate_limiter
 """
 

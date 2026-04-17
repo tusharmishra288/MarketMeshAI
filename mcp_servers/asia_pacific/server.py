@@ -1,5 +1,5 @@
 """
-StockPilot AI — Asia-Pacific MCP Server.
+MarketMesh AI — Asia-Pacific MCP Server.
 
 This MCP server handles all market-data requests for Asia-Pacific exchanges.
 It runs as a standalone subprocess communicating over stdio, managed by the

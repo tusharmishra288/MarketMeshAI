@@ -1,5 +1,5 @@
 """
-StockPilot AI — Intelligence Routes.
+MarketMesh AI — Intelligence Routes.
 
 This router provides cross-market analytical endpoints that go beyond single-
 ticker data to examine relationships between indices, sectors, and peer stocks.

@@ -1,5 +1,5 @@
 """
-StockPilot AI — Reusable Plotly chart builders.
+MarketMesh AI — Reusable Plotly chart builders.
 
 All functions are pure: they accept data and config parameters and return
 a ``plotly.graph_objects.Figure``. No Streamlit calls inside — callers

@@ -1,5 +1,5 @@
 """
-StockPilot AI — Americas MCP Server.
+MarketMesh AI — Americas MCP Server.
 
 This MCP server handles all market-data requests for North and South American
 exchanges. It runs as a standalone subprocess communicating over stdio and is

@@ -1,5 +1,5 @@
 """
-StockPilot AI — Market Routes.
+MarketMesh AI — Market Routes.
 
 This router provides the core market-data endpoints consumed by the frontend.
 It coordinates calls to the regional MCP servers, applies 2-tier caching, and

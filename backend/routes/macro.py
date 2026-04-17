@@ -1,5 +1,5 @@
 """
-StockPilot AI — Macro Routes (FRED proxy and AI macro context).
+MarketMesh AI — Macro Routes (FRED proxy and AI macro context).
 
 This router proxies FRED (Federal Reserve Economic Data) macroeconomic series
 from the economics MCP server and generates an AI-narrated macro environment

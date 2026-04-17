@@ -1,5 +1,5 @@
 """
-StockPilot AI — AI Routes (company summary and description endpoints).
+MarketMesh AI — AI Routes (company summary and description endpoints).
 
 This router exposes LLM-powered analysis endpoints. Both endpoints use the
 dual-LLM strategy (Groq primary, Gemini fallback) implemented in

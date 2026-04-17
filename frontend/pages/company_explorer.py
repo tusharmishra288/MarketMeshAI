@@ -1,5 +1,5 @@
 """
-StockPilot AI — Company Explorer.
+MarketMesh AI — Company Explorer.
 
 Deep-dive research page for any of the 40,000+ securities listed across the
 31 supported exchanges. Combines live quotes (Finnhub for US, yfinance EOD for

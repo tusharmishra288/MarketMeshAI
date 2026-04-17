@@ -1,5 +1,5 @@
 """
-StockPilot AI — Analytics MCP Server.
+MarketMesh AI — Analytics MCP Server.
 
 This MCP server provides all quantitative analytics for the application. Unlike
 the regional servers (which focus on quotes and fundamentals), this server

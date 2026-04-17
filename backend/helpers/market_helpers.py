@@ -1,5 +1,5 @@
 """
-StockPilot AI — Market Helpers (exchange/region mappings, market status, index fetch).
+MarketMesh AI — Market Helpers (exchange/region mappings, market status, index fetch).
 
 This module provides shared look-up tables and lightweight helper functions
 used by the market, analytics, and intelligence route modules. It does not
@@ -80,7 +80,7 @@ SECTOR_PEERS: Dict[str, list] = {
 
 def _get_region(exchange: str) -> str:
     """
-    Map an exchange code to its StockPilot region string.
+    Map an exchange code to its MarketMesh region string.
 
     The lookup is case-insensitive. Unknown exchanges fall back to
     ``"americas"`` so US-default behaviour is preserved for unrecognised inputs

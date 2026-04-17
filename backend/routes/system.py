@@ -1,5 +1,5 @@
 """
-StockPilot AI — System Routes (health, root, MCP tool listing, cache stats).
+MarketMesh AI — System Routes (health, root, MCP tool listing, cache stats).
 
 This router exposes operational endpoints used by the frontend status panel,
 monitoring systems, and developers. No market data is fetched here — all
@@ -47,7 +47,7 @@ async def root():
         each region to its connection status string).
     """
     return {
-        "message":     "StockPilot AI Multi-Region MCP Orchestrator v3",
+        "message":     "MarketMesh AI Multi-Region MCP Orchestrator v3",
         "version":     "3.0.0",
         "documentation": "/docs",
         "mcp_sessions": _session_status,

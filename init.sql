@@ -1,5 +1,5 @@
 -- Database Initialization Script
--- Creates tables for StockPilot AI
+-- Creates tables for MarketMesh AI
 
 -- Companies table
 CREATE TABLE IF NOT EXISTS companies (

@@ -1,5 +1,5 @@
 """
-StockPilot AI — application entry point.
+MarketMesh AI — application entry point.
 
 This is the root Streamlit script executed by ``streamlit run app.py``. It must
 be loaded before any page so that ``st.set_page_config`` (which must be the very
@@ -23,8 +23,8 @@ from utils import ALL_EXCHANGES, EXCHANGE_SHORT_NAMES
 
 # ── Must be the very first Streamlit call ─────────────────────────────────────
 st.set_page_config(
-    page_title="StockPilot AI",
-    page_icon="✈️",
+    page_title="MarketMesh AI",
+    page_icon="🌐",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -229,7 +229,7 @@ section[data-testid="stSidebar"] .stButton > button {
 
 # ── Shared sidebar (rendered on every page) ───────────────────────────────────
 with st.sidebar:
-    st.title("✈️ StockPilot AI")
+    st.title("🌐 MarketMesh AI")
     st.markdown("**Real-time stock intelligence across 31 exchanges in 26 countries, powered by 6 AI agents.**")
     st.markdown("---")
 
@@ -335,7 +335,7 @@ with st.sidebar:
                     st.error("Could not reach backend")
 
     st.markdown("---")
-    st.caption("✈️ StockPilot AI · Built with MCP Architecture")
+    st.caption("🌐 MarketMesh AI · Built with MCP Architecture")
 
 # ── Page definitions with custom sidebar labels ───────────────────────────────
 pg = st.navigation([

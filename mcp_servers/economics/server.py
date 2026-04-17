@@ -1,5 +1,5 @@
 """
-StockPilot AI — Economics MCP Server (FRED Macro Data).
+MarketMesh AI — Economics MCP Server (FRED Macro Data).
 
 This MCP server provides macroeconomic context by proxying data from the
 Federal Reserve Economic Data (FRED) REST API. It runs as a standalone
