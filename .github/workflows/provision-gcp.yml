@@ -132,21 +132,28 @@ jobs:
           ZONE=us-central1-a
 
           if gcloud compute addresses describe "$IP_NAME" --region="$REGION" --project="$PROJECT" &>/dev/null; then
-            echo "Static IP '$IP_NAME' already exists."
+            echo "Static IP '$IP_NAME' already exists — skipping."
           else
             echo "Reserving static IP..."
             gcloud compute addresses create "$IP_NAME" --region="$REGION" --project="$PROJECT"
 
-            # Attach to VM
-            gcloud compute instances delete-access-config "$VM" \
-              --access-config-name="External NAT" \
-              --zone="$ZONE" --project="$PROJECT" || true
+            # Look up the actual access config name (varies: "External NAT" vs "external-nat")
+            ACCESS_CONFIG=$(gcloud compute instances describe "$VM" \
+              --zone="$ZONE" --project="$PROJECT" \
+              --format='get(networkInterfaces[0].accessConfigs[0].name)')
+            echo "Detected access config name: $ACCESS_CONFIG"
 
+            # Remove the existing ephemeral access config
+            gcloud compute instances delete-access-config "$VM" \
+              --access-config-name="$ACCESS_CONFIG" \
+              --zone="$ZONE" --project="$PROJECT"
+
+            # Attach the reserved static IP
             STATIC_IP=$(gcloud compute addresses describe "$IP_NAME" \
               --region="$REGION" --project="$PROJECT" --format='get(address)')
 
             gcloud compute instances add-access-config "$VM" \
-              --access-config-name="External NAT" \
+              --access-config-name="$ACCESS_CONFIG" \
               --address="$STATIC_IP" \
               --zone="$ZONE" --project="$PROJECT"
 
