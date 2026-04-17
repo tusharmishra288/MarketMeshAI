@@ -126,42 +126,63 @@ jobs:
 
       # ── Step 2: Pull code + rebuild + restart ─────────────────────────────
       - name: Deploy application
+        env:
+          REPO_URL: https://github.com/${{ github.repository }}.git
+          DEPLOY_BRANCH: ${{ github.ref_name }}
         run: |
           ssh -i ~/.ssh/marketmesh_gcp \
               -o StrictHostKeyChecking=no \
               -o ServerAliveInterval=30 \
               marketmesh@${{ steps.vm_ip.outputs.ip }} \
-              'set -euo pipefail
-               echo "=== MarketMesh AI deploy: $(date) ==="
+              "set -euo pipefail
+               echo '=== MarketMesh AI deploy: '$(date)' ==='
 
-               # Fix ownership if repo was cloned as root by vm-startup.sh (one-time, idempotent)
-               if [ "$(stat -c %U /opt/marketmesh 2>/dev/null)" != "$(whoami)" ]; then
-                 sudo chown -R "$(whoami)":"$(whoami)" /opt/marketmesh
-                 echo "Ownership fixed: /opt/marketmesh → $(whoami)"
+               # ── Fix ownership (one-time, idempotent) ──────────────────────
+               # vm-startup.sh clones as root; we SSH as marketmesh. Fix once.
+               if [ -e /opt/marketmesh ] && [ \"\$(stat -c %U /opt/marketmesh)\" != \"\$(whoami)\" ]; then
+                 sudo chown -R \"\$(whoami):\$(whoami)\" /opt/marketmesh
+                 echo 'Ownership fixed → '$(whoami)
                fi
 
-               # Allow git to operate on this directory regardless of who owns it
-               git config --global --add safe.directory /opt/marketmesh
+               # ── Ensure /opt/marketmesh is a valid git repo ────────────────
+               # Re-clone if the directory is missing or not a git repo
+               # (happens when startup script used wrong URL or repo was private)
+               if [ ! -d /opt/marketmesh/.git ]; then
+                 echo 'No valid git repo found — cloning fresh...'
+                 sudo mkdir -p /opt/marketmesh
+                 sudo chown \"\$(whoami):\$(whoami)\" /opt/marketmesh
+                 git clone $REPO_URL /opt/marketmesh
+               fi
 
                cd /opt/marketmesh
 
-               git fetch origin main
-               git reset --hard origin/main
-               echo "Code: $(git rev-parse --short HEAD)"
+               # Ensure remote URL is correct (fixes stale clones from startup script)
+               git remote set-url origin $REPO_URL
 
+               # Trust this directory (cross-user ownership)
+               git config --global --add safe.directory /opt/marketmesh
+
+               # ── Pull latest code ──────────────────────────────────────────
+               git fetch --all --prune
+               git checkout $DEPLOY_BRANCH 2>/dev/null || git checkout -b $DEPLOY_BRANCH origin/$DEPLOY_BRANCH
+               git reset --hard origin/$DEPLOY_BRANCH
+               echo 'Code: '$(git rev-parse --short HEAD)' (branch: $DEPLOY_BRANCH)'
+
+               # ── Build and start containers ────────────────────────────────
                docker compose -f docker-compose-gcp.yml build --quiet
                docker compose -f docker-compose-gcp.yml up -d
 
-               echo "Waiting for orchestrator health (up to 3 min)..."
-               for i in $(seq 1 18); do
-                 STATUS=$(docker inspect --format="{{.State.Health.Status}}" marketmesh_orchestrator 2>/dev/null || echo "starting")
-                 echo "  [$i/18] $STATUS"
-                 [ "$STATUS" = "healthy" ] && break
+               # ── Wait for orchestrator to become healthy ───────────────────
+               echo 'Waiting for orchestrator health (up to 3 min)...'
+               for i in \$(seq 1 18); do
+                 STATUS=\$(docker inspect --format='{{.State.Health.Status}}' marketmesh_orchestrator 2>/dev/null || echo 'starting')
+                 echo \"  [\$i/18] \$STATUS\"
+                 [ \"\$STATUS\" = 'healthy' ] && break
                  sleep 10
                done
 
                docker compose -f docker-compose-gcp.yml ps
-               echo "=== Deploy complete: $(date) ==="'
+               echo '=== Deploy complete: '$(date)' ==='"
         timeout-minutes: 20
 
       # ── Step 3: Health check from Actions runner ──────────────────────────
