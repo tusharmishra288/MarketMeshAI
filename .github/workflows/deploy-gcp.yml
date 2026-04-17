@@ -1,0 +1,91 @@
+name: Deploy to GCP e2-micro
+
+# Triggers:
+#   - Push to main branch
+#   - Manual trigger from GitHub Actions UI (workflow_dispatch)
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    name: SSH deploy → GCP e2-micro
+    runs-on: ubuntu-latest
+
+    steps:
+      # ── 1. Checkout (not strictly needed for SSH deploy, but useful for diff) ──
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # ── 2. Deploy via SSH ────────────────────────────────────────────────────
+      #
+      # Required GitHub Secrets (Settings → Secrets and variables → Actions):
+      #
+      #   GCP_VM_IP     External IP of your e2-micro instance
+      #                 (gcloud compute instances describe marketmesh-vm
+      #                  --format='get(networkInterfaces[0].accessConfigs[0].natIP)')
+      #
+      #   GCP_VM_USER   OS username on the VM (usually your Google account local part,
+      #                 e.g. "john" for john@gmail.com, or check: gcloud compute ssh
+      #                 marketmesh-vm --command="whoami")
+      #
+      #   GCP_SSH_KEY   Private SSH key (PEM format, begins with -----BEGIN ...)
+      #                 Generate with: ssh-keygen -t ed25519 -C "github-actions"
+      #                 Then add the PUBLIC key to the VM:
+      #                   gcloud compute instances add-metadata marketmesh-vm \
+      #                     --metadata ssh-keys="USERNAME:$(cat ~/.ssh/id_ed25519.pub)"
+      #
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.GCP_VM_IP }}
+          username: ${{ secrets.GCP_VM_USER }}
+          key: ${{ secrets.GCP_SSH_KEY }}
+          port: 22
+          # Allow longer timeout — e2-micro CPU burst can make `docker build` slow
+          command_timeout: 20m
+          script: |
+            set -euo pipefail
+
+            echo "=== MarketMesh AI deploy: $(date) ==="
+            cd /opt/marketmesh
+
+            # Pull latest code
+            git fetch origin main
+            git reset --hard origin/main
+            echo "Code updated to: $(git rev-parse --short HEAD)"
+
+            # Rebuild images and restart services
+            # --no-cache ensures fresh build on every deploy; remove it for faster
+            # deploys if you haven't changed Dockerfiles or requirements.txt
+            docker compose -f docker-compose-gcp.yml build
+            docker compose -f docker-compose-gcp.yml up -d
+
+            # Wait for orchestrator health (up to 3 minutes)
+            echo "Waiting for orchestrator to be healthy..."
+            for i in $(seq 1 18); do
+              STATUS=$(docker inspect --format='{{.State.Health.Status}}' marketmesh_orchestrator 2>/dev/null || echo "starting")
+              echo "  [$i/18] orchestrator status: $STATUS"
+              [ "$STATUS" = "healthy" ] && break
+              sleep 10
+            done
+
+            # Print final status
+            docker compose -f docker-compose-gcp.yml ps
+            echo "=== Deploy complete: $(date) ==="
+
+      # ── 3. Post-deploy health check from the Actions runner ──────────────────
+      - name: Verify health endpoint
+        run: |
+          echo "Checking /health on ${{ secrets.GCP_VM_IP }}:8000 ..."
+          for i in 1 2 3 4 5; do
+            HTTP=$(curl -s -o /dev/null -w "%{http_code}" \
+                   --max-time 10 \
+                   "http://${{ secrets.GCP_VM_IP }}:8000/health" || echo "000")
+            echo "  Attempt $i: HTTP $HTTP"
+            [ "$HTTP" = "200" ] && echo "Health check passed." && exit 0
+            sleep 15
+          done
+          echo "Health check failed after 5 attempts."
+          exit 1

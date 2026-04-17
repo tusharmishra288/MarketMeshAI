@@ -1,0 +1,67 @@
+version: '3.8'
+
+# MarketMesh AI — GCP e2-micro optimised compose
+#
+# Differences from docker-compose.yml:
+#   - Redis removed (1 GB RAM budget; app falls back to in-memory L1 cache)
+#   - REDIS_HOST left empty so backend never tries to connect
+#   - GCP_PROJECT_ID passed through so Firestore watchlist persistence works
+#   - mem_limit set on both services to stay inside 1 GB + 2 GB swap
+#   - start_period 120 s (e2-micro burstable CPU is slower at image startup)
+#
+# Firestore credentials:
+#   The VM service account (set up with cloud-platform scope in create-vm.sh)
+#   provides Application Default Credentials automatically — no key file needed.
+#
+# Usage:
+#   docker compose -f docker-compose-gcp.yml up -d
+
+services:
+
+  # ── FastAPI orchestrator + 6 MCP stdio subprocesses ────────────────────────
+  orchestrator:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: marketmesh_orchestrator
+    ports:
+      - "8000:8000"
+    env_file: .env
+    environment:
+      - REDIS_HOST=                        # empty → in-memory L1 cache only
+      - BACKEND_HOST=0.0.0.0
+      - BACKEND_PORT=8000
+      # Firestore: pass GCP_PROJECT_ID from .env so database.py connects automatically
+      # On GCP VM, ADC credentials come from the instance metadata service (no key file).
+      - GCP_PROJECT_ID=${GCP_PROJECT_ID:-}
+    networks: [appnet]
+    restart: unless-stopped
+    mem_limit: 700m        # leaves ~300 MB for frontend + kernel
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 15s
+      start_period: 120s   # e2-micro needs extra time for MCP server init
+      retries: 5
+
+  # ── Streamlit frontend ──────────────────────────────────────────────────────
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    container_name: marketmesh_frontend
+    ports:
+      - "8501:8501"
+    environment:
+      - BACKEND_URL=http://orchestrator:8000
+    depends_on:
+      orchestrator:
+        condition: service_healthy
+    networks: [appnet]
+    restart: unless-stopped
+    mem_limit: 250m
+
+networks:
+  appnet:
+    driver: bridge
