@@ -521,12 +521,15 @@ GCP e2-micro (0.25 vCPU burst / 1 GB RAM) is in the **Always Free** tier — zer
 
 ### One-command provisioning
 
-```bash
-# 1. Edit variables at the top of the script
-nano deploy/gcp/create-vm.sh   # set PROJECT_ID, GITHUB_USERNAME
+The script accepts configuration via environment variables (no file editing required):
 
-# 2. Run it
+```bash
 chmod +x deploy/gcp/create-vm.sh
+
+# Pass project and GitHub username as env vars
+GCP_PROJECT_ID=my-project GITHUB_USERNAME=myuser ./deploy/gcp/create-vm.sh
+
+# Or edit the default values at the top of the script, then:
 ./deploy/gcp/create-vm.sh
 ```
 
@@ -535,25 +538,22 @@ This script:
 - Passes a startup script that installs Docker, adds 2 GB swap, and clones the repo
 - Enables the Firestore API and grants `roles/datastore.user` to the VM service account
 - Creates a Firestore database in Native mode
+- Reserves a **static external IP** (so `GCP_VM_IP` secret never goes stale)
 - Opens firewall ports 80, 443, 8000, 8501
+- Prints all 10 GitHub Secret values to configure after the run
 
 ### First launch
 
-`.env` is not in the repo (`.gitignore`'d). Transfer it from your local machine before starting the app:
+No manual `.env` transfer is needed. After provisioning the VM:
 
-```bash
-# Run on your LOCAL machine — copies your configured .env to the VM
-gcloud compute scp .env marketmesh-vm:/opt/marketmesh/.env --zone=us-central1-a
+1. Add all 10 GitHub Secrets shown in the script output (see [Required GitHub Secrets](#required-github-secrets) below)
+2. Push any commit to `main` — GitHub Actions will:
+   - SSH into the VM
+   - Write `/opt/marketmesh/.env` from the GitHub Secrets
+   - Run `docker compose -f docker-compose-gcp.yml build && up -d`
+3. Monitor the run in the **Actions** tab of your repo
 
-# Then SSH in and start
-gcloud compute ssh marketmesh-vm --zone=us-central1-a
-cd /opt/marketmesh
-docker compose -f docker-compose-gcp.yml up -d
-```
-
-Make sure `GCP_PROJECT_ID` is set in your `.env` before copying — the `CLOUD DEPLOYMENT` section in `.env` explains each value.
-
-First build: ~8–10 minutes (downloads all Python packages on slow e2-micro CPU).  
+First build: ~8–10 minutes (downloads all Python packages on the slow e2-micro CPU).  
 Subsequent deploys: ~2–3 minutes (Docker layer cache hits).
 
 ### Access URLs
@@ -590,28 +590,45 @@ Every push to `main` automatically deploys to the GCP VM.
 
 ### Required GitHub Secrets
 
-Go to **Settings → Secrets and variables → Actions → New repository secret**:
+Go to **Settings → Secrets and variables → Actions → New repository secret** and add all 10 secrets.
 
-| Secret | How to get it |
-|--------|--------------|
-| `GCP_VM_IP` | Printed by `create-vm.sh`, or: `gcloud compute instances describe marketmesh-vm --zone=us-central1-a --format='get(networkInterfaces[0].accessConfigs[0].natIP)'` |
-| `GCP_VM_USER` | `gcloud compute ssh marketmesh-vm --zone=us-central1-a --command="whoami"` |
-| `GCP_SSH_KEY` | Generate: `ssh-keygen -t ed25519 -f ~/.ssh/marketmesh_gcp` → add public key to VM: `gcloud compute instances add-metadata marketmesh-vm --zone=us-central1-a --metadata ssh-keys="USER:$(cat ~/.ssh/marketmesh_gcp.pub)"` → paste contents of `~/.ssh/marketmesh_gcp` as the secret value |
+#### Deployment secrets (SSH access to the VM)
 
-### Reserve a static IP (recommended)
+| Secret | Value |
+|--------|-------|
+| `GCP_VM_IP` | Static IP printed by `create-vm.sh`. Also: `gcloud compute instances describe marketmesh-vm --zone=us-central1-a --format=get(networkInterfaces[0].accessConfigs[0].natIP)` |
+| `GCP_VM_USER` | Your GCP OS username — run `gcloud compute ssh marketmesh-vm --zone=us-central1-a --command=whoami` |
+| `GCP_SSH_KEY` | See steps below |
 
-Without a static IP, `GCP_VM_IP` changes every time the VM is stopped and restarted.
-
+**GCP_SSH_KEY steps:**
 ```bash
-gcloud compute addresses create marketmesh-ip --region=us-central1
-gcloud compute instances delete-access-config marketmesh-vm \
-  --access-config-name="External NAT" --zone=us-central1-a
-gcloud compute instances add-access-config marketmesh-vm \
-  --access-config-name="External NAT" \
-  --address=$(gcloud compute addresses describe marketmesh-ip \
-              --region=us-central1 --format='get(address)') \
-  --zone=us-central1-a
+# 1. Generate a dedicated key pair
+ssh-keygen -t ed25519 -f ~/.ssh/marketmesh_gcp -C "github-actions"
+
+# 2. Upload the public key to the VM
+gcloud compute instances add-metadata marketmesh-vm --zone=us-central1-a \
+  --metadata ssh-keys="YOUR_VM_USER:$(cat ~/.ssh/marketmesh_gcp.pub)"
+
+# 3. Copy the private key content as the GCP_SSH_KEY secret value
+cat ~/.ssh/marketmesh_gcp    # paste this entire output (-----BEGIN ... END-----)
 ```
+
+#### Application secrets (written to `.env` on the VM at every deploy)
+
+GitHub Actions writes these to `/opt/marketmesh/.env` on every push to `main`.  
+**No manual `.env` file transfer is ever needed on GCP.**
+
+| Secret | Where to get the value | Free tier |
+|--------|------------------------|-----------|
+| `FINNHUB_API_KEY` | finnhub.io/register | 60 req/min |
+| `ALPHA_VANTAGE_KEY` | alphavantage.co/support/#api-key | 25 req/day |
+| `MARKETAUX_API_KEY` | marketaux.com/account/signup | 100 req/day |
+| `FRED_API_KEY` | fred.stlouisfed.org/docs/api/api_key.html | 120 req/min |
+| `GROQ_API_KEY` | console.groq.com | 30 req/min |
+| `GEMINI_API_KEY` | aistudio.google.com/apikey | Free tier |
+| `GCP_PROJECT_ID` | Your GCP project ID — enables Firestore watchlist persistence | 1 GB free |
+
+> **Local development:** all values live in your local `.env` file (see root `.env` for comments per variable). The file is `.gitignore`'d and never committed to the repo.
 
 ---
 

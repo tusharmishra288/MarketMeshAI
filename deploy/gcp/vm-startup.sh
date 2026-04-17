@@ -12,13 +12,22 @@
 #   4. Prints next-step instructions to the startup log
 #
 # After the VM is ready:
-#   1. Transfer your local .env to the VM (it is .gitignore'd, not in the repo):
-#        gcloud compute scp .env marketmesh-vm:/opt/marketmesh/.env \
-#          --zone=us-central1-a
-#   2. Then SSH in and start the app:
-#        gcloud compute ssh marketmesh-vm --zone=us-central1-a
-#        cd /opt/marketmesh
-#        docker compose -f docker-compose-gcp.yml up -d
+#   1. Configure all 10 GitHub Secrets in your repository
+#      (Settings → Secrets and variables → Actions):
+#
+#      Deployment secrets:
+#        GCP_VM_IP, GCP_VM_USER, GCP_SSH_KEY
+#
+#      Application secrets (written to .env on the VM by GitHub Actions):
+#        FINNHUB_API_KEY, ALPHA_VANTAGE_KEY, MARKETAUX_API_KEY,
+#        FRED_API_KEY, GROQ_API_KEY, GEMINI_API_KEY, GCP_PROJECT_ID
+#
+#   2. Push to the main branch — GitHub Actions will:
+#        a. SSH into this VM
+#        b. Write /opt/marketmesh/.env from the secrets above
+#        c. git pull + docker compose build + docker compose up -d
+#
+#   No manual .env transfer is required.
 # =============================================================================
 
 set -euo pipefail
@@ -91,16 +100,29 @@ cat << 'EOF'
 =======================================================================
 MarketMesh AI VM setup complete!
 
-NEXT STEPS:
-  1.  Transfer your local .env to the VM (run this on your LOCAL machine):
-        gcloud compute scp .env marketmesh-vm:/opt/marketmesh/.env --zone=us-central1-a
+NEXT STEPS (all done from your LOCAL machine / GitHub, NOT the VM):
 
-  2.  SSH in and start the app:
-        gcloud compute ssh marketmesh-vm --zone=us-central1-a
-        cd /opt/marketmesh && docker compose -f docker-compose-gcp.yml up -d
+  1.  Add GitHub Secrets (Settings → Secrets and variables → Actions):
+
+      Deployment:
+        GCP_VM_IP          ← shown by create-vm.sh
+        GCP_VM_USER        ← gcloud compute ssh marketmesh-vm --command="whoami"
+        GCP_SSH_KEY        ← see README for ssh-keygen steps
+
+      Application (GitHub Actions writes these to .env on this VM):
+        FINNHUB_API_KEY
+        ALPHA_VANTAGE_KEY
+        MARKETAUX_API_KEY
+        FRED_API_KEY
+        GROQ_API_KEY
+        GEMINI_API_KEY
+        GCP_PROJECT_ID
+
+  2.  Push to the main branch of your MarketMeshAI repo.
+      GitHub Actions will SSH in, write .env from the secrets above,
+      then run: docker compose -f docker-compose-gcp.yml up -d
 
 The first build takes ~8 minutes on e2-micro.
-Logs: docker compose -f docker-compose-gcp.yml logs -f
 
 Health check:  curl http://localhost:8000/health
 Frontend:      http://<VM_EXTERNAL_IP>:8501
