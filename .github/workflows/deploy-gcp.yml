@@ -173,8 +173,12 @@ jobs:
                # Group change takes effect on next login; use sudo for this session.
                sudo usermod -aG docker \"\$(whoami)\" 2>/dev/null || true
 
-               # ── Prune old images/cache to free disk space ─────────────────
-               sudo docker system prune -f
+               # ── Prune stopped containers + dangling images (keep build cache) ──
+               # docker system prune -f also wipes the build cache, making every
+               # run a cold rebuild (~40 min). Targeted pruning keeps the cache so
+               # subsequent deploys reuse CACHED layers and finish in ~3-5 min.
+               sudo docker container prune -f
+               sudo docker image prune -f
                echo 'Disk after prune:' && df -h /
 
                # ── Build containers ──────────────────────────────────────────

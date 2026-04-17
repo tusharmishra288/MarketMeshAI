@@ -7,8 +7,8 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Python dependencies
-COPY requirements.txt .
+# Install Python dependencies (frontend-only slim list — keeps image ~200 MB vs ~2 GB)
+COPY frontend/requirements.txt requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy entire frontend directory (includes Home.py and pages/)
