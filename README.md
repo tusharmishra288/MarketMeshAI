@@ -8,9 +8,6 @@
 ![MCP](https://img.shields.io/badge/MCP-1.0%2B-6366f1)
 ![GCP](https://img.shields.io/badge/Deploy-GCP%20e2--micro-4285F4?logo=googlecloud&logoColor=white)
 
-**🌐 Live UI:** [http://34.121.76.195:8501](http://34.121.76.195:8501)  
-**📖 API Docs:** [http://34.121.76.195:8000/docs](http://34.121.76.195:8000/docs)
-
 ---
 
 ## Table of Contents
@@ -272,7 +269,7 @@ docker compose down
 
 ## API Reference
 
-Full interactive docs: `http://localhost:8000/docs` or [http://34.121.76.195:8000/docs](http://34.121.76.195:8000/docs)
+Full interactive docs: `http://localhost:8000/docs`
 
 ### System
 | Method | Path | Description |
@@ -505,7 +502,7 @@ What it does on each run:
 
 **First build: 8–10 minutes** (downloading all Python packages on e2-micro).  
 **Subsequent deploys: 2–3 minutes** (Docker layer cache).  
-A green checkmark = app is live at [http://34.121.76.195:8501](http://34.121.76.195:8501).
+A green checkmark = app is live at `http://<VM_IP>:8501`.
 
 ---
 
