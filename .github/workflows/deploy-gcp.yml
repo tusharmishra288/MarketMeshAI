@@ -133,6 +133,16 @@ jobs:
               marketmesh@${{ steps.vm_ip.outputs.ip }} \
               'set -euo pipefail
                echo "=== MarketMesh AI deploy: $(date) ==="
+
+               # Fix ownership if repo was cloned as root by vm-startup.sh (one-time, idempotent)
+               if [ "$(stat -c %U /opt/marketmesh 2>/dev/null)" != "$(whoami)" ]; then
+                 sudo chown -R "$(whoami)":"$(whoami)" /opt/marketmesh
+                 echo "Ownership fixed: /opt/marketmesh → $(whoami)"
+               fi
+
+               # Allow git to operate on this directory regardless of who owns it
+               git config --global --add safe.directory /opt/marketmesh
+
                cd /opt/marketmesh
 
                git fetch origin main
