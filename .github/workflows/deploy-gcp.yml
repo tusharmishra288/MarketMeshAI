@@ -35,7 +35,7 @@ name: 2 - Deploy to GCP
 
 on:
   push:
-    branches: [main]
+    branches: [main, master]
   workflow_dispatch:
 
 jobs:
@@ -168,20 +168,24 @@ jobs:
                git reset --hard origin/$DEPLOY_BRANCH
                echo 'Code: '$(git rev-parse --short HEAD)' (branch: $DEPLOY_BRANCH)'
 
+               # ── Ensure marketmesh user is in docker group (idempotent) ───
+               # Group change takes effect on next login; use sudo for this session.
+               sudo usermod -aG docker \"\$(whoami)\" 2>/dev/null || true
+
                # ── Build and start containers ────────────────────────────────
-               docker compose -f docker-compose-gcp.yml build --quiet
-               docker compose -f docker-compose-gcp.yml up -d
+               sudo docker compose -f docker-compose-gcp.yml build --quiet
+               sudo docker compose -f docker-compose-gcp.yml up -d
 
                # ── Wait for orchestrator to become healthy ───────────────────
                echo 'Waiting for orchestrator health (up to 3 min)...'
                for i in \$(seq 1 18); do
-                 STATUS=\$(docker inspect --format='{{.State.Health.Status}}' marketmesh_orchestrator 2>/dev/null || echo 'starting')
+                 STATUS=\$(sudo docker inspect --format='{{.State.Health.Status}}' marketmesh_orchestrator 2>/dev/null || echo 'starting')
                  echo \"  [\$i/18] \$STATUS\"
                  [ \"\$STATUS\" = 'healthy' ] && break
                  sleep 10
                done
 
-               docker compose -f docker-compose-gcp.yml ps
+               sudo docker compose -f docker-compose-gcp.yml ps
                echo '=== Deploy complete: '$(date)' ==='"
         timeout-minutes: 20
 
