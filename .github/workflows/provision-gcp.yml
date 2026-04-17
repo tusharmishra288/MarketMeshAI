@@ -1,0 +1,200 @@
+name: 1 - Provision GCP VM (run once)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Run this workflow ONCE to create all GCP infrastructure.
+# After it completes, every push to main triggers "2 - Deploy to GCP".
+#
+# Required GitHub Secrets (Settings → Secrets and variables → Actions):
+#
+#   GCP_SA_KEY      Service-account JSON key with these roles on the project:
+#                     roles/compute.admin
+#                     roles/iam.serviceAccountUser
+#                     roles/datastore.owner
+#                     roles/resourcemanager.projectIamAdmin
+#                     roles/serviceusage.serviceUsageAdmin
+#                   How to create:
+#                     GCP Console → IAM & Admin → Service Accounts → Create
+#                     → grant above roles → Keys tab → Add Key → JSON
+#                     Paste the entire JSON as this secret.
+#
+#   GCP_PROJECT_ID  Your GCP project ID (e.g. "marketmesh-ai-461023")
+#
+#   GCP_SSH_KEY     SSH private key (ed25519, PEM format) used by deploy workflow.
+#                   Generate once in Cloud Shell or locally:
+#                     ssh-keygen -t ed25519 -f ~/.ssh/marketmesh_gcp -C "github-actions" -N ""
+#                     cat ~/.ssh/marketmesh_gcp   ← paste this as GCP_SSH_KEY
+#                   The public key is derived automatically and uploaded to the VM.
+#
+# Total secrets for this workflow: 3  (GCP_SA_KEY, GCP_PROJECT_ID, GCP_SSH_KEY)
+# ─────────────────────────────────────────────────────────────────────────────
+
+on:
+  workflow_dispatch:   # manual trigger only — run once from Actions tab
+
+jobs:
+  provision:
+    name: Create VM + Firestore + static IP + firewall
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # ── Authenticate gcloud with service account ──────────────────────────
+      - name: Authenticate gcloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Set up gcloud CLI
+        uses: google-github-actions/setup-gcloud@v2
+
+      # ── Create e2-micro VM (idempotent) ───────────────────────────────────
+      - name: Create VM
+        run: |
+          PROJECT=${{ secrets.GCP_PROJECT_ID }}
+          ZONE=us-central1-a
+          VM=marketmesh-vm
+
+          if gcloud compute instances describe "$VM" --zone="$ZONE" --project="$PROJECT" &>/dev/null; then
+            echo "VM '$VM' already exists — skipping creation."
+          else
+            echo "Creating VM '$VM'..."
+            gcloud compute instances create "$VM" \
+              --project="$PROJECT" \
+              --zone="$ZONE" \
+              --machine-type=e2-micro \
+              --image-family=ubuntu-2204-lts \
+              --image-project=ubuntu-os-cloud \
+              --boot-disk-size=30GB \
+              --boot-disk-type=pd-standard \
+              --boot-disk-device-name="$VM" \
+              --network-interface=network-tier=PREMIUM,subnet=default \
+              --maintenance-policy=MIGRATE \
+              --tags=marketmesh-server \
+              --metadata="github-owner=${{ github.repository_owner }}" \
+              --metadata-from-file=startup-script=deploy/gcp/vm-startup.sh \
+              --scopes=https://www.googleapis.com/auth/cloud-platform
+            echo "VM created."
+          fi
+
+      # ── Upload SSH public key derived from GCP_SSH_KEY secret ────────────
+      # The VM username is hardcoded to "marketmesh" — used by the deploy workflow.
+      - name: Upload SSH public key to VM
+        run: |
+          echo "${{ secrets.GCP_SSH_KEY }}" > /tmp/priv_key
+          chmod 600 /tmp/priv_key
+          PUB_KEY=$(ssh-keygen -y -f /tmp/priv_key)
+          rm -f /tmp/priv_key
+
+          gcloud compute instances add-metadata marketmesh-vm \
+            --zone=us-central1-a \
+            --project=${{ secrets.GCP_PROJECT_ID }} \
+            --metadata ssh-keys="marketmesh:${PUB_KEY}"
+          echo "SSH public key uploaded. VM username: marketmesh"
+
+      # ── Enable Firestore + grant IAM to VM service account ───────────────
+      - name: Enable Firestore API
+        run: |
+          gcloud services enable firestore.googleapis.com \
+            --project=${{ secrets.GCP_PROJECT_ID }} || true
+
+      - name: Grant Firestore IAM to VM service account
+        run: |
+          PROJECT=${{ secrets.GCP_PROJECT_ID }}
+          SA_EMAIL=$(gcloud iam service-accounts list \
+            --project="$PROJECT" \
+            --filter="displayName:Compute Engine default service account" \
+            --format="value(email)" 2>/dev/null \
+            || echo "${PROJECT}-compute@developer.gserviceaccount.com")
+
+          echo "Granting roles/datastore.user to: $SA_EMAIL"
+          gcloud projects add-iam-policy-binding "$PROJECT" \
+            --member="serviceAccount:${SA_EMAIL}" \
+            --role="roles/datastore.user" \
+            --quiet || true
+
+      - name: Create Firestore database
+        run: |
+          gcloud firestore databases create \
+            --project=${{ secrets.GCP_PROJECT_ID }} \
+            --location=nam5 \
+            --type=firestore-native 2>/dev/null \
+            || echo "Firestore database already exists."
+
+      # ── Reserve static IP (idempotent) ────────────────────────────────────
+      - name: Reserve static IP
+        run: |
+          PROJECT=${{ secrets.GCP_PROJECT_ID }}
+          REGION=us-central1
+          IP_NAME=marketmesh-ip
+          VM=marketmesh-vm
+          ZONE=us-central1-a
+
+          if gcloud compute addresses describe "$IP_NAME" --region="$REGION" --project="$PROJECT" &>/dev/null; then
+            echo "Static IP '$IP_NAME' already exists."
+          else
+            echo "Reserving static IP..."
+            gcloud compute addresses create "$IP_NAME" --region="$REGION" --project="$PROJECT"
+
+            # Attach to VM
+            gcloud compute instances delete-access-config "$VM" \
+              --access-config-name="External NAT" \
+              --zone="$ZONE" --project="$PROJECT" || true
+
+            STATIC_IP=$(gcloud compute addresses describe "$IP_NAME" \
+              --region="$REGION" --project="$PROJECT" --format='get(address)')
+
+            gcloud compute instances add-access-config "$VM" \
+              --access-config-name="External NAT" \
+              --address="$STATIC_IP" \
+              --zone="$ZONE" --project="$PROJECT"
+
+            echo "Static IP assigned: $STATIC_IP"
+          fi
+
+      # ── Firewall rules (idempotent) ───────────────────────────────────────
+      - name: Create firewall rules
+        run: |
+          PROJECT=${{ secrets.GCP_PROJECT_ID }}
+          if gcloud compute firewall-rules describe allow-marketmesh --project="$PROJECT" &>/dev/null; then
+            echo "Firewall rule already exists."
+          else
+            gcloud compute firewall-rules create allow-marketmesh \
+              --project="$PROJECT" \
+              --direction=INGRESS \
+              --priority=1000 \
+              --network=default \
+              --action=ALLOW \
+              --rules=tcp:80,tcp:443,tcp:8000,tcp:8501 \
+              --source-ranges=0.0.0.0/0 \
+              --target-tags=marketmesh-server
+            echo "Firewall rule created."
+          fi
+
+      # ── Summary ───────────────────────────────────────────────────────────
+      - name: Print summary
+        run: |
+          PROJECT=${{ secrets.GCP_PROJECT_ID }}
+          IP=$(gcloud compute instances describe marketmesh-vm \
+            --zone=us-central1-a --project="$PROJECT" \
+            --format='get(networkInterfaces[0].accessConfigs[0].natIP)')
+
+          echo ""
+          echo "════════════════════════════════════════════════════════"
+          echo " Provisioning complete!"
+          echo ""
+          echo " VM External IP : $IP  (static)"
+          echo " VM username    : marketmesh"
+          echo ""
+          echo " ✅ Firestore, static IP, firewall — all configured."
+          echo ""
+          echo " ⚠️  Wait ~3 minutes for the VM startup script to finish"
+          echo "    (Docker install + repo clone on first boot)."
+          echo "    Then push to main to trigger the deploy workflow."
+          echo ""
+          echo " App URLs (after deploy):"
+          echo "   Frontend : http://$IP:8501"
+          echo "   API docs : http://$IP:8000/docs"
+          echo "   Health   : http://$IP:8000/health"
+          echo "════════════════════════════════════════════════════════"

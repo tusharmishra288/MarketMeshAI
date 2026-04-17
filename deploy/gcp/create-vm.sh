@@ -39,7 +39,7 @@ set -euo pipefail
 # Edit the defaults here, OR export the variable before running the script
 # (exported env vars always take precedence).
 PROJECT_ID="${GCP_PROJECT_ID:-your-gcp-project-id}"     # gcloud config get-value project
-GITHUB_USERNAME="${GITHUB_USERNAME:-YOUR_GITHUB_USERNAME}"  # your GitHub username for MarketMeshAI repo
+GITHUB_USERNAME="tusharmishra288"  # your GitHub username for MarketMeshAI repo
 VM_NAME="marketmesh-vm"
 ZONE="us-central1-a"                       # must be us-central1, us-east1, or us-west1
 DISK_SIZE="30"                             # GB — free tier allows 30 GB standard HDD

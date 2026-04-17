@@ -15,9 +15,7 @@ alpha-vantage>=2.3.1
 # Database
 # Firestore (GCP) — primary persistence for watchlist/alerts on GCP deployment
 google-cloud-firestore>=2.14.0
-# PostgreSQL / Redis — optional, kept for local dev compatibility
-psycopg2-binary>=2.9.9
-redis>=5.0.1
+# SQLAlchemy kept for any future local DB usage (not active)
 sqlalchemy>=2.0.25
 
 # Async & HTTP

@@ -25,7 +25,7 @@ Dependencies
 - cache_helpers:  L1 in-memory cache (TTL varies by endpoint, see docstrings).
 - market_helpers: Exchange→region mapping, market-status windows, index fetch.
 - enrichment:     Alpha Vantage enrichment and sentiment aggregation.
-- services:       Redis cache manager and API rate limiters.
+- services:       API rate limiter (Redis removed — L1 in-memory cache only).
 """
 
 import os
@@ -55,16 +55,15 @@ async def get_quote(ticker: str, exchange: str = "NASDAQ", use_cache: bool = Tru
     """
     Fetch a real-time (15-min delayed) stock quote for any globally-listed stock.
 
-    Cache TTL: 60 seconds (L1 in-memory). Also checked/stored in L2 Redis via
-    ``cache_manager``. Set ``use_cache=false`` to bypass both cache tiers and
-    force a live MCP call (useful for testing or manual refresh).
+    Cache TTL: 60 seconds (L1 in-memory). Set ``use_cache=false`` to bypass
+    the cache and force a live MCP call (useful for testing or manual refresh).
 
     Args:
         ticker:    Stock ticker symbol (case-insensitive, uppercased internally).
         exchange:  Exchange code, e.g. ``"NASDAQ"``, ``"NSE"``, ``"LSE"``.
                    Determines which regional MCP server handles the request.
-        use_cache: When ``True`` (default), checks L1 then L2 before calling
-                   the MCP server.
+        use_cache: When ``True`` (default), checks L1 in-memory cache before
+                   calling the MCP server.
 
     Returns:
         JSON dict with fields: ``ticker``, ``exchange``, ``price``,
@@ -81,13 +80,9 @@ async def get_quote(ticker: str, exchange: str = "NASDAQ", use_cache: bool = Tru
     if use_cache:
         if cached := _mem_get(key):
             return cached
-        cached_redis = await cache_manager.get_market_data(ticker, exchange, "real_time")
-        if cached_redis:
-            return cached_redis
     region = _get_region(exchange)
     data   = await mcp_call(region, QUOTE_TOOL[region], {"ticker": ticker, "exchange": exchange})
     _mem_set(key, data, ttl_seconds=60)
-    await cache_manager.store_market_data(ticker, exchange, "real_time", data)
     return data
 
 
@@ -98,8 +93,7 @@ async def get_fundamentals(ticker: str, exchange: str = "NASDAQ"):
 
     Pipeline:
       1. Check L1 (in-memory) cache — TTL 3600 s.
-      2. Check L2 Redis cache.
-      3. Call the appropriate regional MCP server (``get_*_fundamentals`` tool).
+      2. Call the appropriate regional MCP server (``get_*_fundamentals`` tool).
       4. Enrich the result with Alpha Vantage OVERVIEW data (fills PE, ROE, etc.).
       5. Compute a ``validation_score`` (0–100%) based on how many of the 5
          required fields (company_name, sector, market_cap, pe_ratio, currency)
@@ -122,9 +116,6 @@ async def get_fundamentals(ticker: str, exchange: str = "NASDAQ"):
     key    = f"fundamentals:{ticker}:{exchange}"
     if cached := _mem_get(key):
         return cached
-    cached_redis = await cache_manager.get_market_data(ticker, exchange, "fundamentals")
-    if cached_redis:
-        return cached_redis
     region = _get_region(exchange)
     data   = await mcp_call(region, FUNDAMENTALS_TOOL[region], {"ticker": ticker, "exchange": exchange})
     data   = await _enrich_with_alpha_vantage(ticker, data)
@@ -140,7 +131,6 @@ async def get_fundamentals(ticker: str, exchange: str = "NASDAQ"):
         pass
 
     _mem_set(key, data, ttl_seconds=3600)
-    await cache_manager.store_market_data(ticker, exchange, "fundamentals", data)
     return data
 
 
@@ -155,8 +145,7 @@ async def global_snapshot():
     servers as concurrent ``asyncio.Task`` objects.
 
     Also returns a ``data_quality`` section with the percentage of indices that
-    returned a non-null value, the number of validated sources, and the Redis
-    cache hit rate.
+    returned a non-null value and the number of validated sources.
 
     Returns:
         JSON dict with keys ``timestamp``, ``regions`` (nested dict per region
@@ -202,7 +191,6 @@ async def global_snapshot():
         "data_quality": {
             "average_quality_score": quality_score,
             "sources_validated":     2,
-            "cache_hit_rate":        cache_manager.get_stats().get("hit_rate", 0),
         },
     }
 

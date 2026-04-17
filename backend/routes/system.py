@@ -24,14 +24,14 @@ Dependencies
 ------------
 - helpers.mcp_client:    ``_sessions`` and ``_session_status`` dicts.
 - helpers.cache_helpers: ``_mem_cache`` dict (for key-count stat).
-- helpers.services:      ``cache_manager`` (Redis stats) and ``rate_limiter``.
+- helpers.services:      ``rate_limiter`` (Redis removed — L1 in-memory cache only).
 """
 
 from fastapi import APIRouter, HTTPException
 
 from helpers.mcp_client   import _sessions, _session_status
 from helpers.cache_helpers import _mem_cache
-from helpers.services      import cache_manager, rate_limiter
+from helpers.services      import rate_limiter
 
 router = APIRouter()
 
@@ -68,15 +68,13 @@ async def health_check():
           - ``status``:      ``"healthy"`` or ``"degraded"``.
           - ``timestamp``:   ISO 8601 datetime of the check.
           - ``mcp_servers``: Per-region connection status dict.
-          - ``cache_stats``: Redis hit rate, total key count, L1 key count.
+          - ``cache_stats``: L1 in-memory key count (Redis removed).
           - ``rate_limits``: Current throttle state for each external API
                              (Marketaux, Alpha Vantage, Finnhub, etc.).
     """
     overall    = "healthy" if all(v == "connected" for v in _session_status.values()) else "degraded"
-    stats      = cache_manager.get_stats()
     cache_info = {
-        "hit_rate":      stats.get("hit_rate", 0),
-        "total_keys":    stats.get("total_keys", 0),
+        "backend":       "in-memory (L1 only)",
         "mem_cache_keys": len(_mem_cache),
     }
     return {
@@ -98,15 +96,12 @@ async def validation_stats():
 
     Returns:
         JSON dict with keys: ``average_quality_score``, ``sources_agreement_rate``,
-        ``cache_hit_rate`` (float 0–1), ``total_keys_cached`` (int),
         ``mem_cache_keys`` (int — current L1 in-memory key count).
     """
-    stats = cache_manager.get_stats()
     return {
         "average_quality_score":   None,
         "sources_agreement_rate":  None,
-        "cache_hit_rate":          stats.get("hit_rate", 0),
-        "total_keys_cached":       stats.get("total_keys", 0),
+        "cache_backend":           "in-memory (L1 only)",
         "mem_cache_keys":          len(_mem_cache),
     }
 
