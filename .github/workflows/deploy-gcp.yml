@@ -73,11 +73,13 @@ jobs:
       # e.g. "marketmesh" not "marketmesh.duckdns.org").
       - name: Update DuckDNS
         run: |
-          RESPONSE=$(curl -s \
-            "https://www.duckdns.org/update?domains=${{ secrets.DUCKDNS_DOMAIN }}&token=${{ secrets.DUCKDNS_TOKEN }}&ip=${{ steps.vm_ip.outputs.ip }}")
+          DOMAIN="${{ secrets.DUCKDNS_DOMAIN }}"
+          TOKEN="${{ secrets.DUCKDNS_TOKEN }}"
+          IP="${{ steps.vm_ip.outputs.ip }}"
+          RESPONSE=$(curl -s "https://www.duckdns.org/update?domains=${DOMAIN}&token=${TOKEN}&ip=${IP}")
           echo "DuckDNS response: $RESPONSE"
           if [ "$RESPONSE" = "OK" ]; then
-            echo "✅ DuckDNS updated: ${{ secrets.DUCKDNS_DOMAIN }}.duckdns.org → ${{ steps.vm_ip.outputs.ip }}"
+            echo "✅ DuckDNS updated: ${DOMAIN}.duckdns.org → ${IP}"
           else
             echo "⚠️ DuckDNS update returned unexpected response — check DUCKDNS_TOKEN and DUCKDNS_DOMAIN secrets"
           fi
