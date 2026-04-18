@@ -73,15 +73,17 @@ jobs:
       # e.g. "marketmesh" not "marketmesh.duckdns.org").
       - name: Update DuckDNS
         run: |
-          DOMAIN="${{ secrets.DUCKDNS_DOMAIN }}"
-          TOKEN="${{ secrets.DUCKDNS_TOKEN }}"
+          DOMAIN=$(printf '%s' '${{ secrets.DUCKDNS_DOMAIN }}' | tr -d '[:space:]')
+          TOKEN=$(printf '%s' '${{ secrets.DUCKDNS_TOKEN }}' | tr -d '[:space:]')
           IP="${{ steps.vm_ip.outputs.ip }}"
-          RESPONSE=$(curl -s "https://www.duckdns.org/update?domains=${DOMAIN}&token=${TOKEN}&ip=${IP}")
+          RESPONSE=$(curl -fs --max-time 10 \
+            "https://www.duckdns.org/update?domains=${DOMAIN}&token=${TOKEN}&ip=${IP}" \
+            || echo "CURL_ERROR")
           echo "DuckDNS response: $RESPONSE"
           if [ "$RESPONSE" = "OK" ]; then
             echo "✅ DuckDNS updated: ${DOMAIN}.duckdns.org → ${IP}"
           else
-            echo "⚠️ DuckDNS update returned unexpected response — check DUCKDNS_TOKEN and DUCKDNS_DOMAIN secrets"
+            echo "⚠️ DuckDNS response was not OK — continuing deploy (IP unchanged)"
           fi
 
       # ── Write SSH private key ─────────────────────────────────────────────
