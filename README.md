@@ -2,6 +2,8 @@
 
 > Production-grade, multi-region stock intelligence platform powered by 6 MCP agent servers, XGBoost ML prediction, dual-LLM AI analysis, and real-time data from 31 global exchanges.
 
+**🌐 [Live App](https://marketmeshai.duckdns.org) · [API Docs](https://marketmeshai.duckdns.org/docs) · [Health](https://marketmeshai.duckdns.org/health)**
+
 ![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue?logo=python&logoColor=white)
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.109%2B-009688?logo=fastapi&logoColor=white)
 ![Streamlit](https://img.shields.io/badge/Streamlit-1.37%2B-FF4B4B?logo=streamlit&logoColor=white)
