@@ -67,6 +67,21 @@ jobs:
           echo "ip=$IP" >> "$GITHUB_OUTPUT"
           echo "VM IP: $IP"
 
+      # ── Update DuckDNS with current VM IP (idempotent, safe to run every deploy) ──
+      # If IP hasn't changed DuckDNS still returns OK — no harm done.
+      # Requires two secrets: DUCKDNS_TOKEN and DUCKDNS_DOMAIN (subdomain only,
+      # e.g. "marketmesh" not "marketmesh.duckdns.org").
+      - name: Update DuckDNS
+        run: |
+          RESPONSE=$(curl -s \
+            "https://www.duckdns.org/update?domains=${{ secrets.DUCKDNS_DOMAIN }}&token=${{ secrets.DUCKDNS_TOKEN }}&ip=${{ steps.vm_ip.outputs.ip }}")
+          echo "DuckDNS response: $RESPONSE"
+          if [ "$RESPONSE" = "OK" ]; then
+            echo "✅ DuckDNS updated: ${{ secrets.DUCKDNS_DOMAIN }}.duckdns.org → ${{ steps.vm_ip.outputs.ip }}"
+          else
+            echo "⚠️ DuckDNS update returned unexpected response — check DUCKDNS_TOKEN and DUCKDNS_DOMAIN secrets"
+          fi
+
       # ── Write SSH private key ─────────────────────────────────────────────
       - name: Prepare SSH key
         run: |

@@ -500,9 +500,19 @@ What it does on each run:
 | Health poll | Waits up to 3 min for orchestrator `healthy` status |
 | Final check | `GET /health` from Actions runner — must return HTTP 200 |
 
-**First build: 8–10 minutes** (downloading all Python packages on e2-micro).  
-**Subsequent deploys: 2–3 minutes** (Docker layer cache).  
-A green checkmark = app is live at `http://<VM_IP>:8501`.
+**First build: ~20 minutes** (cold pip install on e2-micro — backend ML stack).  
+**Subsequent deploys: 3–5 minutes** (Docker layer cache preserved).  
+A green checkmark = app is live at the URLs below.
+
+### Live URLs
+
+| | URL |
+|---|---|
+| **Frontend** | https://marketmeshai.duckdns.org |
+| **API docs** | https://marketmeshai.duckdns.org/docs |
+| **Health** | https://marketmeshai.duckdns.org/health |
+
+DuckDNS is updated automatically on every deploy — if the VM IP ever changes the domain stays correct with no manual intervention.
 
 ---
 
@@ -515,6 +525,7 @@ A green checkmark = app is live at `http://<VM_IP>:8501`.
 | Region | `us-central1-a` (Always Free eligible) |
 | Monthly cost | **$0** (GCP Always Free tier) |
 | Static IP | `marketmesh-ip` |
+| Domain | `marketmeshai.duckdns.org` (free, auto-updated on deploy) |
 | Firewall | TCP 80, 443, 8000, 8501 |
 | Containers | orchestrator 700 MB limit · frontend 250 MB limit |
 | Persistence | Cloud Firestore — 1 GB / 50 K reads / 20 K writes per day free |
@@ -523,18 +534,17 @@ A green checkmark = app is live at `http://<VM_IP>:8501`.
 
 Change the GitHub Secret value → push any commit → the deploy workflow writes the new `.env` on the next run. No SSH into the VM required.
 
-### Optional: HTTPS with Nginx
+### HTTPS via Nginx + DuckDNS
+
+HTTPS is served by Nginx (reverse proxy) with a free Let's Encrypt certificate. The deploy workflow automatically keeps `marketmeshai.duckdns.org` pointed at the current VM IP via the DuckDNS API on every run.
 
 ```bash
-gcloud compute ssh marketmesh-vm --zone=us-central1-a
-sudo cp /opt/marketmesh/deploy/gcp/nginx.conf /etc/nginx/sites-available/marketmesh
-sudo ln -s /etc/nginx/sites-available/marketmesh /etc/nginx/sites-enabled/
-sudo rm -f /etc/nginx/sites-enabled/default
-sudo nginx -t && sudo systemctl reload nginx
-sudo certbot --nginx -d yourdomain.com
+# One-time setup on the VM (already done)
+sudo apt install nginx certbot python3-certbot-nginx -y
+sudo certbot --nginx -d marketmeshai.duckdns.org
 ```
 
-`nginx.conf` routes `yourdomain.com` → Streamlit (8501) and `yourdomain.com/api/` → FastAPI (8000), with WebSocket support.
+Nginx routes `marketmeshai.duckdns.org` → Streamlit (8501) and `/api/` → FastAPI (8000) with WebSocket support for Streamlit.
 
 ---
 
