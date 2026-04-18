@@ -177,8 +177,8 @@ multi-region-stock-ai/
 │   └── economics/server.py        # FRED: yield curve, inflation, Fed rate, GDP, PMI
 │
 ├── deploy/gcp/
-│   ├── vm-startup.sh              # First-boot: 2 GB swap + Docker + repo clone
-│   └── nginx.conf                 # Optional Nginx reverse proxy (HTTPS)
+│   ├── vm-startup.sh              # First-boot: 2 GB swap + Docker + repo clone (used by provision workflow)
+│   └── nginx.conf                 # Nginx reverse proxy base config — HTTP block only; certbot adds HTTPS
 │
 ├── .github/workflows/
 │   ├── provision-gcp.yml          # Run once: VM + Firestore + static IP + SSH key upload

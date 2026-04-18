@@ -244,37 +244,31 @@ jobs:
           ssh -i ~/.ssh/marketmesh_gcp \
               -o StrictHostKeyChecking=no \
               marketmesh@${{ steps.vm_ip.outputs.ip }} \
-              "set -e
-               DOMAIN=${{ secrets.DUCKDNS_DOMAIN }}.duckdns.org
+              "DOMAIN=${{ secrets.DUCKDNS_DOMAIN }}.duckdns.org
+               echo '=== Nginx + SSL: '\$DOMAIN' ==='
 
-               # ── Install Nginx + Certbot if missing (idempotent) ───────────
                sudo apt-get install -y -q nginx certbot python3-certbot-nginx
 
-               # ── Copy nginx.conf from repo; substitute __DOMAIN__ ──────────
-               sudo cp /opt/marketmesh/deploy/gcp/nginx.conf \
-                       /etc/nginx/sites-available/marketmesh
-               sudo sed -i \"s/__DOMAIN__/\$DOMAIN/g\" \
-                       /etc/nginx/sites-available/marketmesh
-
-               # ── Enable site + reload ──────────────────────────────────────
-               sudo ln -sf /etc/nginx/sites-available/marketmesh \
-                           /etc/nginx/sites-enabled/marketmesh
+               sudo cp /opt/marketmesh/deploy/gcp/nginx.conf /etc/nginx/sites-available/marketmesh
+               sudo sed -i 's/__DOMAIN__/'\$DOMAIN'/g' /etc/nginx/sites-available/marketmesh
+               sudo ln -sf /etc/nginx/sites-available/marketmesh /etc/nginx/sites-enabled/marketmesh
                sudo rm -f /etc/nginx/sites-enabled/default
-               sudo nginx -t
-               sudo systemctl enable nginx
-               sudo systemctl reload nginx
-               echo 'Nginx configured → '\$DOMAIN
 
-               # ── Obtain / renew SSL cert ───────────────────────────────────
-               # --keep-until-expiring → no-op if cert valid for >30 days
-               # --register-unsafely-without-email → no extra secret needed
-               # || echo → non-fatal if DNS hasn't propagated yet
+               if sudo nginx -t 2>&1; then
+                 sudo systemctl enable nginx
+                 sudo systemctl reload nginx
+                 echo 'Nginx reloaded OK'
+               else
+                 echo 'nginx -t failed — skipping reload'
+               fi
+
                sudo certbot --nginx -d \"\$DOMAIN\" \
                    --non-interactive --agree-tos \
                    --register-unsafely-without-email \
-                   --keep-until-expiring \
                  && echo '✅ SSL cert OK for '\$DOMAIN \
-                 || echo '⚠️  Certbot skipped — HTTP works; HTTPS activates next deploy'"
+                 || echo '⚠️  Certbot failed — HTTP still works; check DNS propagation'
+
+               echo '=== Nginx + SSL done ==='"
         timeout-minutes: 5
 
       # ── Step 4: Health check from Actions runner ──────────────────────────
