@@ -227,15 +227,111 @@ jobs:
                echo '=== Deploy complete: '$(date)' ==='"
         timeout-minutes: 40
 
-      # ── Step 3: Health check from Actions runner ──────────────────────────
+      # ── Step 3: Configure Nginx reverse proxy + SSL (idempotent) ────────────
+      #
+      # Runs on every deploy — safe to repeat:
+      #   • apt install is a no-op if already installed
+      #   • Nginx config is overwritten (keeps it in sync with workflow)
+      #   • --keep-until-expiring skips cert request if valid >30 days
+      #     (avoids Let's Encrypt rate-limit of 5 certs/domain/week)
+      #
+      # Requires: DUCKDNS_DOMAIN secret (subdomain only, e.g. "marketmeshai")
+      # Uses << 'ENDSSH' so bash does NOT expand $http_upgrade / $host etc.;
+      # GitHub Actions still expands ${{ }} expressions before bash runs.
+      - name: Configure Nginx + SSL
+        run: |
+          ssh -i ~/.ssh/marketmesh_gcp \
+              -o StrictHostKeyChecking=no \
+              marketmesh@${{ steps.vm_ip.outputs.ip }} << 'ENDSSH'
+          set -e
+          DOMAIN=${{ secrets.DUCKDNS_DOMAIN }}.duckdns.org
+
+          # ── Install Nginx + Certbot if missing ────────────────────────────
+          sudo apt-get install -y -q nginx certbot python3-certbot-nginx
+
+          # ── Write Nginx config ────────────────────────────────────────────
+          # __DOMAIN__ is a plain-string placeholder replaced by sed below
+          # so that $host / $http_upgrade (Nginx vars) are never touched by bash.
+          sudo tee /etc/nginx/sites-available/marketmesh > /dev/null << 'NGINXEOF'
+server {
+    listen 80;
+    server_name __DOMAIN__;
+
+    # Streamlit frontend — WebSocket support is required
+    location / {
+        proxy_pass         http://localhost:8501;
+        proxy_http_version 1.1;
+        proxy_set_header   Upgrade    $http_upgrade;
+        proxy_set_header   Connection "upgrade";
+        proxy_set_header   Host       $host;
+        proxy_set_header   X-Real-IP  $remote_addr;
+        proxy_set_header   X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header   X-Forwarded-Proto $scheme;
+        proxy_read_timeout 86400;
+    }
+
+    # FastAPI orchestrator
+    location /api/ {
+        proxy_pass       http://localhost:8000;
+        proxy_set_header Host      $host;
+        proxy_set_header X-Real-IP $remote_addr;
+    }
+
+    # Swagger / ReDoc API docs
+    location /docs {
+        proxy_pass       http://localhost:8000/docs;
+        proxy_set_header Host $host;
+    }
+
+    location /openapi.json {
+        proxy_pass       http://localhost:8000/openapi.json;
+        proxy_set_header Host $host;
+    }
+
+    # Backend health
+    location /health {
+        proxy_pass       http://localhost:8000/health;
+    }
+}
+NGINXEOF
+
+          # Substitute placeholder with real domain
+          sudo sed -i "s/__DOMAIN__/$DOMAIN/g" /etc/nginx/sites-available/marketmesh
+
+          # ── Enable site + reload Nginx ─────────────────────────────────────
+          sudo ln -sf /etc/nginx/sites-available/marketmesh \
+                      /etc/nginx/sites-enabled/marketmesh
+          sudo rm -f /etc/nginx/sites-enabled/default
+          sudo nginx -t
+          sudo systemctl enable nginx
+          sudo systemctl reload nginx
+          echo "Nginx configured → $DOMAIN"
+
+          # ── Obtain / renew SSL cert ───────────────────────────────────────
+          # --keep-until-expiring  → no-op if cert is valid for >30 days
+          # --register-unsafely-without-email → no extra secret needed
+          # || echo  → non-fatal: HTTP still works if DNS hasn't propagated yet
+          sudo certbot --nginx -d "$DOMAIN" \
+              --non-interactive --agree-tos \
+              --register-unsafely-without-email \
+              --keep-until-expiring \
+            && echo "✅ SSL cert OK for $DOMAIN" \
+            || echo "⚠️  Certbot skipped — HTTP works; HTTPS will activate once DNS propagates"
+          ENDSSH
+        timeout-minutes: 5
+
+      # ── Step 4: Health check from Actions runner ──────────────────────────
       - name: Health check
         run: |
           IP=${{ steps.vm_ip.outputs.ip }}
-          echo "GET http://$IP:8000/health"
+          DOMAIN=${{ secrets.DUCKDNS_DOMAIN }}.duckdns.org
+          echo "Checking http://$IP:8000/health (direct) and https://$DOMAIN/health (Nginx)"
           for i in 1 2 3 4 5; do
             CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 "http://$IP:8000/health" || echo "000")
-            echo "  Attempt $i: HTTP $CODE"
-            [ "$CODE" = "200" ] && echo "✅ Health check passed." && exit 0
+            echo "  Attempt $i: HTTP $CODE (direct)"
+            [ "$CODE" = "200" ] && echo "✅ Health check passed." && \
+              echo "  Frontend → https://$DOMAIN" && \
+              echo "  API docs → https://$DOMAIN/docs" && exit 0
             sleep 15
           done
           echo "❌ Health check failed after 5 attempts."
