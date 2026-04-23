@@ -30,11 +30,13 @@ services:
       # On GCP VM, ADC credentials come from the instance metadata service automatically.
       - GCP_PROJECT_ID=${GCP_PROJECT_ID:-}
     networks: [appnet]
-    restart: unless-stopped
+    restart: always
     mem_limit: 700m
     healthcheck:
+      # Exit 1 when status is "degraded" (any MCP server dead) so the VM cron
+      # watchdog detects it and runs docker compose restart orchestrator.
       test: ["CMD", "python", "-c",
-             "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+             "import urllib.request,json,sys; d=json.load(urllib.request.urlopen('http://localhost:8000/health')); sys.exit(0 if d['status']=='healthy' else 1)"]
       interval: 30s
       timeout: 15s
       start_period: 120s
@@ -54,7 +56,7 @@ services:
       orchestrator:
         condition: service_started
     networks: [appnet]
-    restart: unless-stopped
+    restart: always
     mem_limit: 250m
 
 networks:

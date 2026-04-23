@@ -32,7 +32,8 @@ import os
 import sys
 import json
 import logging
-from typing import Dict
+import asyncio
+from typing import Dict, List
 from contextlib import AsyncExitStack
 
 from fastapi import HTTPException
@@ -117,3 +118,47 @@ async def mcp_call(region: str, tool: str, arguments: dict) -> dict:
         # frontend can distinguish "server down" (503) from "not found" (404).
         raise HTTPException(status_code=404, detail=data["error"])
     return data
+
+
+async def mcp_watchdog(regions: List[str], interval_s: int = 60) -> None:
+    """
+    Background asyncio task — pings every MCP session every *interval_s* seconds
+    and updates ``_session_status`` to reflect real liveness.
+
+    Why this is necessary
+    ---------------------
+    MCP servers are stdio subprocesses. If a subprocess is OOM-killed or crashes,
+    the ``ClientSession`` object in ``_sessions`` becomes stale but the orchestrator
+    process stays alive — ``_session_status`` would forever report ``"connected"``
+    without this watchdog. The Docker health check reads ``_session_status`` via
+    ``/health``, so a stale "connected" entry hides the failure from Docker.
+
+    Recovery path
+    -------------
+    1. Subprocess dies → watchdog detects it within *interval_s* seconds.
+    2. ``_session_status[region]`` is set to ``"timeout"``.
+    3. ``/health`` returns ``{"status": "degraded", ...}``.
+    4. Docker health check (configured to exit 1 on degraded) marks container
+       unhealthy after ``retries`` failures.
+    5. VM cron watchdog runs ``docker compose restart orchestrator`` within 5 min.
+    6. Container restarts → lifespan re-spawns all MCP subprocesses → recovered.
+
+    Args:
+        regions:    List of region keys to watch (same order as lifespan startup).
+        interval_s: Seconds between full ping cycles. Default 60 s.
+    """
+    await asyncio.sleep(interval_s)          # let startup fully settle first
+    while True:
+        for region in regions:
+            session = _sessions.get(region)
+            if session is None:
+                continue
+            try:
+                await asyncio.wait_for(session.list_tools(), timeout=10)
+                if _session_status.get(region) != "connected":
+                    log.info("[MCP watchdog] %s recovered → connected", region)
+                _session_status[region] = "connected"
+            except Exception as exc:
+                _session_status[region] = "timeout"
+                log.warning("[MCP watchdog] %s session dead: %s", region, exc)
+        await asyncio.sleep(interval_s)

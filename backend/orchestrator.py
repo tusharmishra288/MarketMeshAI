@@ -53,7 +53,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from helpers.mcp_client import _sessions, _session_status, _start_mcp_server
+from helpers.mcp_client import _sessions, _session_status, _start_mcp_server, mcp_watchdog
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [orchestrator] %(message)s")
 log = logging.getLogger(__name__)
@@ -110,7 +110,20 @@ async def lifespan(app: FastAPI):
     from services.database import init_db
     await init_db()
 
+    # Start background watchdog — pings each MCP session every 60 s and
+    # updates _session_status so /health reflects real liveness. When a
+    # subprocess dies the status flips to "timeout", the Docker health check
+    # detects "degraded", and the VM cron restarts the container within 5 min.
+    watchdog_task = asyncio.create_task(mcp_watchdog(regions, interval_s=60))
+    log.info("[MCP watchdog] started (interval=60s)")
+
     yield  # Application runs here — request handlers are live
+
+    watchdog_task.cancel()
+    try:
+        await watchdog_task
+    except asyncio.CancelledError:
+        pass
 
     from services.database import close_db
     await close_db()

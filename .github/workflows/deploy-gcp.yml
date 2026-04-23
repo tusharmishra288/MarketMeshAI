@@ -275,7 +275,23 @@ jobs:
                echo '=== Nginx + SSL done ==='"
         timeout-minutes: 5
 
-      # ── Step 4: Health check from Actions runner ──────────────────────────
+      # ── Step 4: Install VM cron watchdog (idempotent) ────────────────────
+      # Copies deploy/gcp/watchdog.sh → /usr/local/bin/marketmesh-watchdog
+      # and installs a crontab entry that runs it every 5 minutes.
+      # If /health returns "degraded" the script runs docker compose restart
+      # orchestrator, which respawns all 6 MCP subprocesses fresh.
+      - name: Install watchdog cron
+        run: |
+          ssh -i ~/.ssh/marketmesh_gcp \
+              -o StrictHostKeyChecking=no \
+              marketmesh@${{ steps.vm_ip.outputs.ip }} \
+              "sudo cp /opt/marketmesh/deploy/gcp/watchdog.sh /usr/local/bin/marketmesh-watchdog
+               sudo chmod +x /usr/local/bin/marketmesh-watchdog
+               (crontab -l 2>/dev/null | grep -v marketmesh-watchdog; \
+                echo '*/5 * * * * /usr/local/bin/marketmesh-watchdog >> /var/log/marketmesh-watchdog.log 2>&1') | crontab -
+               echo '✅ Watchdog cron active:' && crontab -l | grep watchdog"
+
+      # ── Step 5: Health check from Actions runner ──────────────────────────
       - name: Health check
         run: |
           IP=${{ steps.vm_ip.outputs.ip }}
