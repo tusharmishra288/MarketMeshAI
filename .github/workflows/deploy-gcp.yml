@@ -200,21 +200,46 @@ jobs:
                sudo docker image prune -f
                echo 'Disk after prune:' && df -h /
 
-               # ── Build containers ──────────────────────────────────────────
-               # --progress=plain is a global compose flag (must come before -f).
-               # Streams layer output so SSH stays alive on slow e2-micro builds.
-               sudo docker compose --progress=plain -f docker-compose-gcp.yml build
+               # ── Smart selective rebuild ───────────────────────────────────
+               # Rebuilding the orchestrator image on e2-micro takes 20-25 min
+               # (layer export to HDD dominates). Skip if no backend files changed.
+               PREV=\$(git rev-parse HEAD~1 2>/dev/null || echo '')
+               BUILD_ORCHESTRATOR=yes
+               BUILD_FRONTEND=yes
+               if [ -n \"\$PREV\" ]; then
+                 CHANGED=\$(git diff --name-only \$PREV HEAD)
+                 echo \"Changed files:\"; echo \"\$CHANGED\"
+                 echo \"\$CHANGED\" | grep -qE '^(backend/|mcp_servers/|requirements\\.txt|docker-compose)' \
+                   && BUILD_ORCHESTRATOR=yes || BUILD_ORCHESTRATOR=no
+                 echo \"\$CHANGED\" | grep -qE '^(frontend/|docker-compose)' \
+                   && BUILD_FRONTEND=yes || BUILD_FRONTEND=no
+               fi
+
+               # ── Build containers (only what changed) ─────────────────────
+               # --progress=plain streams layer output so SSH stays alive on slow builds.
+               if [ \"\$BUILD_ORCHESTRATOR\" = 'yes' ]; then
+                 echo 'Building orchestrator (backend/mcp_servers changed)...'
+                 sudo docker compose --progress=plain -f docker-compose-gcp.yml build orchestrator
+               else
+                 echo 'Orchestrator unchanged — skipping rebuild.'
+               fi
+               if [ \"\$BUILD_FRONTEND\" = 'yes' ]; then
+                 echo 'Building frontend...'
+                 sudo docker compose --progress=plain -f docker-compose-gcp.yml build frontend
+               else
+                 echo 'Frontend unchanged — skipping rebuild.'
+               fi
 
                # ── Start orchestrator only ───────────────────────────────────
                # Frontend depends_on is service_started so compose up won't block
                # on the health check; we manage that ourselves below.
                sudo docker compose -f docker-compose-gcp.yml up -d orchestrator
 
-               # ── Wait for orchestrator to become healthy (up to 6 min) ─────
+               # ── Wait for orchestrator to become healthy (up to 8 min) ─────
                echo 'Waiting for orchestrator health...'
-               for i in \$(seq 1 36); do
+               for i in \$(seq 1 48); do
                  STATUS=\$(sudo docker inspect --format='{{.State.Health.Status}}' marketmesh_orchestrator 2>/dev/null || echo 'starting')
-                 echo \"  [\$i/36] \$STATUS\"
+                 echo \"  [\$i/48] \$STATUS\"
                  if [ \"\$STATUS\" = 'healthy' ]; then break; fi
                  if [ \"\$STATUS\" = 'unhealthy' ]; then
                    echo '--- orchestrator logs (last 80 lines) ---'
@@ -229,7 +254,7 @@ jobs:
 
                sudo docker compose -f docker-compose-gcp.yml ps
                echo '=== Deploy complete: '$(date)' ==='"
-        timeout-minutes: 40
+        timeout-minutes: 60
 
       # ── Step 3: Configure Nginx reverse proxy + SSL (idempotent) ────────────
       #
