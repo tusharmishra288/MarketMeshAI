@@ -1,4 +1,4 @@
-mcp==1.23.0
+mcp==1.28.1
 yfinance==0.2.36
 finnhub-python==2.4.19
 python-dotenv==1.2.2
