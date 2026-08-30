@@ -93,3 +93,4 @@ dump.rdb
 *.bak
 *.orig
 *.out
+.claude

@@ -92,7 +92,7 @@ async def ai_macro_context(refresh: bool = False):
 
     Prompt engineering notes:
     - Context is a single compact sentence to stay within token budgets for the
-      fast Groq model (llama-3.1-8b-instant at 8k context).
+      fast Groq model (openai/gpt-oss-20b).
     - The prompt explicitly bans ``"Key: Value"`` pairs inside text fields to
       prevent the LLM from simply echoing the numbers instead of analysing them.
     - ``risks`` is constrained to exactly 3 complete sentences so the frontend
@@ -174,7 +174,7 @@ async def ai_macro_context(refresh: bool = False):
             import groq as _groq
             client = _groq.AsyncGroq(api_key=groq_key, timeout=15.0)
             resp = await client.chat.completions.create(
-                model="llama-3.1-8b-instant",
+                model="openai/gpt-oss-20b",
                 messages=[{"role": "user", "content": prompt}],
                 response_format={"type": "json_object"},
                 max_tokens=700,
@@ -182,7 +182,7 @@ async def ai_macro_context(refresh: bool = False):
             parsed = json.loads(resp.choices[0].message.content)
             result.update({k: v for k, v in parsed.items()
                            if k in ("summary", "equity_impact", "risks", "stance")})
-            result["model_used"] = "groq/llama-3.1-8b-instant"
+            result["model_used"] = "groq/openai/gpt-oss-20b"
         except Exception as e:
             log.warning("Groq macro context failed: %s", e)
 
@@ -191,14 +191,14 @@ async def ai_macro_context(refresh: bool = False):
             import google.generativeai as genai
             genai.configure(api_key=os.getenv("GEMINI_API_KEY", ""))
             model = genai.GenerativeModel(
-                "gemini-2.0-flash",
+                "gemini-3.6-flash",
                 generation_config=genai.GenerationConfig(response_mime_type="application/json"),
             )
             response = await asyncio.to_thread(model.generate_content, prompt)
             parsed   = json.loads(response.text)
             result.update({k: v for k, v in parsed.items()
                            if k in ("summary", "equity_impact", "risks", "stance")})
-            result["model_used"] = "gemini-2.0-flash"
+            result["model_used"] = "gemini-3.6-flash"
         except Exception as e:
             log.warning("Gemini macro fallback failed: %s", e)
             result["summary"]      = "AI analysis unavailable — GROQ_API_KEY not configured."

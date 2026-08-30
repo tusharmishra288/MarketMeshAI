@@ -5,7 +5,10 @@ pydantic>=2.7.2
 python-dotenv>=1.0.0
 
 # MCP Protocol
-mcp>=1.0.0
+# Pinned to 1.x: mcp 2.0 moved the @server.list_tools()/@server.call_tool()
+# decorators off the low-level Server class onto the new MCPServer class.
+# The six servers in mcp_servers/ are written against the 1.x decorator API.
+mcp>=1.0.0,<2.0.0
 
 # Data Sources
 yfinance>=0.2.36

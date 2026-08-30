@@ -9,10 +9,12 @@ endpoint never returns an empty response.
 
 LLM strategy
 -------------
-- Primary:  Groq ``llama-3.1-8b-instant`` — sub-1-second inference, JSON-mode
-  supported, free tier allows ~14,400 tokens/minute.
-- Fallback: Google ``gemini-2.0-flash`` — reliable quality, JSON mime type
-  enforced via ``GenerationConfig``, slightly higher latency.
+- Primary:  Groq ``openai/gpt-oss-20b`` — sub-1-second inference, JSON-mode
+  supported, free tier. (Replaced llama-3.1-8b-instant, which Groq shut down
+  on 2026-08-16; gpt-oss-20b is Groq's recommended migration target.)
+- Fallback: Google ``gemini-3.6-flash`` — reliable quality, JSON mime type
+  enforced via ``GenerationConfig``, slightly higher latency. (Replaced
+  gemini-2.0-flash, retired mid-2026.)
 - Final fallback (``_ai_describe_company`` only): regex sentence-split of the
   raw description — always produces a usable 2-sentence output.
 
@@ -84,7 +86,7 @@ async def _ai_describe_company(company_name: str, raw_description: str) -> dict:
             # not block the FastAPI event loop
             resp = await asyncio.to_thread(
                 client.chat.completions.create,
-                model="llama-3.1-8b-instant",
+                model="openai/gpt-oss-20b",
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.2,   # low temperature → deterministic, factual
                 max_tokens=200,    # 2-3 sentences fits comfortably in 200 tokens
@@ -100,7 +102,7 @@ async def _ai_describe_company(company_name: str, raw_description: str) -> dict:
         try:
             import google.generativeai as genai
             genai.configure(api_key=gemini_key)
-            model = genai.GenerativeModel("gemini-2.0-flash")
+            model = genai.GenerativeModel("gemini-3.6-flash")
             # Gemini SDK is also synchronous — wrap in to_thread
             response = await asyncio.to_thread(model.generate_content, prompt)
             short_desc = response.text.strip()
@@ -176,14 +178,14 @@ Provide a JSON response with exactly these keys:
             # json_object mode guarantees a parseable response without markdown fences
             resp = await asyncio.to_thread(
                 client.chat.completions.create,
-                model="llama-3.1-8b-instant",
+                model="openai/gpt-oss-20b",
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.3,
                 max_tokens=600,
                 response_format={"type": "json_object"},
             )
             result = json.loads(resp.choices[0].message.content)
-            result["model_used"]    = "groq/llama-3.1-8b-instant"
+            result["model_used"]    = "groq/openai/gpt-oss-20b"
             result["generated_at"]  = datetime.now().isoformat()
             return result
         except Exception as e:
@@ -197,7 +199,7 @@ Provide a JSON response with exactly these keys:
             # response_mime_type="application/json" is Gemini's equivalent of Groq's
             # json_object mode — forces the model to output valid JSON
             model = genai.GenerativeModel(
-                "gemini-2.0-flash",
+                "gemini-3.6-flash",
                 generation_config=genai.GenerationConfig(response_mime_type="application/json"),
             )
             response = await asyncio.to_thread(
@@ -205,7 +207,7 @@ Provide a JSON response with exactly these keys:
                 prompt + "\n\nRespond with valid JSON only.",
             )
             result = json.loads(response.text)
-            result["model_used"]   = "gemini-2.0-flash"
+            result["model_used"]   = "gemini-3.6-flash"
             result["generated_at"] = datetime.now().isoformat()
             return result
         except Exception as e:

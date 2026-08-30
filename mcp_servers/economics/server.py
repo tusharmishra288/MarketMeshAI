@@ -21,7 +21,15 @@ FRED series used
 - A191RL1Q225SBEA:  Real GDP growth rate (QoQ annualised, quarterly).
 - UNRATE:           US unemployment rate (monthly).
 - UMCSENT:          University of Michigan Consumer Sentiment index (monthly).
-- NAPM:             ISM Manufacturing PMI (monthly, older series code).
+- NAPM:             REMOVED. FRED deleted all 22 Institute for Supply
+                    Management series on 2016-06-24 at ISM's request, so this
+                    ID returns HTTP 400. ISM licenses PMI commercially and
+                    there is no free FRED equivalent. Replaced by INDPRO.
+- INDPRO:           Industrial Production Index (monthly, 2017=100). Free
+                    Fed-published proxy for manufacturing activity. NOTE: this
+                    is an index level, NOT a 0-100 diffusion index — the "above
+                    50 = expansion" reading that applies to PMI does not apply
+                    here. Interpret via the year-over-year change instead.
 
 Tools exposed
 -------------
@@ -31,7 +39,7 @@ Tools exposed
 - get_fed_rate:         Federal funds rate history.
 - get_gdp_growth:       Real GDP QoQ growth rate with average.
 - get_macro_indicators: Latest snapshot of unemployment, consumer sentiment,
-                        and ISM Manufacturing PMI.
+                        and industrial production.
 
 Dependencies
 ------------
@@ -73,7 +81,7 @@ SERIES = {
     # Labor & Sentiment
     "UNRATE":    "Unemployment Rate",
     "UMCSENT":   "Consumer Sentiment (UMich)",
-    "NAPM":      "ISM Manufacturing PMI",
+    "INDPRO":    "Industrial Production Index",
 }
 
 
@@ -364,13 +372,14 @@ async def get_macro_indicators(**kwargs) -> List[TextContent]:
 
     Fetches unemployment rate (UNRATE, 24 months to avoid gaps with ``"."`
     values), University of Michigan Consumer Sentiment (UMCSENT, 12 months),
-    and ISM Manufacturing PMI (NAPM, 24 months due to 1-2 month reporting lag).
-    Only the latest valid observation is returned for each series.
+    and Industrial Production (INDPRO, 24 months so a year-over-year change
+    can be computed).
 
     Returns:
         List with a single TextContent containing: ``unemployment`` (dict with
-        ``date`` and ``value``), ``consumer_sentiment`` (dict), ``ism_pmi``
-        (dict), ``source``, ``fetched_at``.
+        ``date`` and ``value``), ``consumer_sentiment`` (dict),
+        ``industrial_production`` (dict with ``date``, ``value``, and
+        ``yoy_pct``), ``source``, ``fetched_at``.
     """
     async def safe_fred(series_id: str, limit: int = 2) -> list:
         try:
@@ -380,17 +389,27 @@ async def get_macro_indicators(**kwargs) -> List[TextContent]:
 
     unrate = await safe_fred("UNRATE",  24)   # 24-month window avoids "." gaps
     umcsi  = await safe_fred("UMCSENT", 12)
-    ism    = await safe_fred("NAPM",    24)   # ISM/NAPM has 1-2 month reporting lag
+    indpro = await safe_fred("INDPRO",  24)   # 24 months → enough for YoY
 
     def latest(obs):
         return obs[-1] if obs else {"date": None, "value": None}
 
+    # Year-over-year % change: compare the newest observation against the one
+    # 12 months earlier. Guards against short series and division by zero.
+    def with_yoy(obs):
+        current = latest(obs)
+        yoy = None
+        if len(obs) >= 13 and obs[-13]["value"]:
+            prior = obs[-13]["value"]
+            yoy = round((obs[-1]["value"] - prior) / prior * 100, 2)
+        return {**current, "yoy_pct": yoy}
+
     result = {
-        "unemployment":       latest(unrate),
-        "consumer_sentiment": latest(umcsi),
-        "ism_pmi":            latest(ism),
-        "source":             "FRED",
-        "fetched_at":         datetime.now().isoformat(),
+        "unemployment":          latest(unrate),
+        "consumer_sentiment":    latest(umcsi),
+        "industrial_production": with_yoy(indpro),
+        "source":                "FRED",
+        "fetched_at":            datetime.now().isoformat(),
     }
     return [TextContent(type="text", text=json.dumps(result))]
 
