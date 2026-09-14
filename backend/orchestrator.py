@@ -69,7 +69,7 @@ async def lifespan(app: FastAPI):
       1. Open a shared AsyncExitStack so all MCP stdio transports share a single
          cleanup scope (prevents resource leaks if one server fails mid-startup).
       2. Warn about missing API keys so operators know which features are degraded.
-      3. Start each MCP server subprocess sequentially with a 30-second timeout.
+      3. Start each MCP server subprocess sequentially with a 120-second timeout.
          Servers that timeout or raise are marked "timeout"/"error" in
          _session_status but do NOT abort the rest of the startup sequence —
          the app runs in degraded mode rather than refusing to start.
@@ -92,16 +92,23 @@ async def lifespan(app: FastAPI):
 
     for region in regions:
         try:
-            # 30-second timeout: MCP servers spawn a Python subprocess + initialize()
-            # handshake. On slow machines (Windows with antivirus) this can be tight.
-            session = await asyncio.wait_for(_start_mcp_server(region, stack), timeout=30)
+            # 120-second timeout: MCP servers spawn a Python subprocess +
+            # initialize() handshake. On a dev laptop each takes well under a
+            # second, but on an e2-micro (shared burstable vCPU, 1 GB RAM)
+            # importing pandas / numpy / yfinance takes 15-30 s each. At the
+            # previous 30 s, asia_pacific and mena timed out on every cold start,
+            # leaving /health permanently "degraded" and failing the deploy.
+            # Servers start sequentially rather than concurrently on purpose:
+            # six simultaneous numpy/pandas imports would peak past the
+            # container's 700 MB limit.
+            session = await asyncio.wait_for(_start_mcp_server(region, stack), timeout=120)
             _sessions[region]       = session
             _session_status[region] = "connected"
             log.info("[MCP] %s server started", region)
         except asyncio.TimeoutError:
-            # Server process started but did not complete initialize() in 30s
+            # Server process started but did not complete initialize() in time
             _session_status[region] = "timeout"
-            log.error("[MCP] %s server timed out after 30s — skipping", region)
+            log.error("[MCP] %s server timed out after 120s — skipping", region)
         except Exception as e:
             # Import error, missing dependency, or port conflict in the subprocess
             _session_status[region] = "error"

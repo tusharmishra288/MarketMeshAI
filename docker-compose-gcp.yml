@@ -45,7 +45,11 @@ services:
              "import urllib.request,json,sys; d=json.load(urllib.request.urlopen('http://localhost:8000/health')); sys.exit(0 if d['status']=='healthy' else 1)"]
       interval: 30s
       timeout: 15s
-      start_period: 120s
+      # 360 s: the six MCP subprocesses start sequentially and each takes
+      # 15-30 s on an e2-micro, so a cold start runs ~3-4 min. At the previous
+      # 120 s the check began counting failures while the app was still booting.
+      # Failures inside start_period do not count toward retries.
+      start_period: 360s
       retries: 5
 
   # ── Streamlit frontend ──────────────────────────────────────────────────────
