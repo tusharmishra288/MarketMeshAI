@@ -39,9 +39,116 @@ on:
   workflow_dispatch:
 
 jobs:
+  # ── Build images on the runner, push to GHCR ─────────────────────────────
+  #
+  # Why not build on the VM: an e2-micro has shared burstable vCPUs, 1 GB RAM and
+  # a slow persistent disk, so an orchestrator build takes 20-25 min there (40 min
+  # cold). A GitHub runner has 4 cores and an SSD, and its layer cache is not at
+  # the mercy of the VM's disk pressure. The VM then only pulls (~2 min).
+  #
+  # Change detection: paths-filter compares against the previous commit on push
+  # (github.event.before), so a multi-commit push is covered correctly.
+  build:
+    name: Build → push images to GHCR
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write        # required to push to ghcr.io
+    outputs:
+      image_repo: ${{ steps.meta.outputs.repo }}
+      image_tag: ${{ steps.meta.outputs.tag }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0     # need history for the diff below
+
+      - name: Decide what changed
+        id: changed
+        run: |
+          # On workflow_dispatch there is no event.before — build both.
+          BEFORE='${{ github.event.before }}'
+          if [ -z "$BEFORE" ] || [ "$BEFORE" = '0000000000000000000000000000000000000000' ] \
+             || ! git cat-file -e "$BEFORE" 2>/dev/null; then
+            echo 'No usable base commit — building both images.'
+            echo 'orchestrator=true' >> $GITHUB_OUTPUT
+            echo 'frontend=true'     >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          CHANGED=$(git diff --name-only "$BEFORE" ${{ github.sha }})
+          echo "Changed files:"; echo "$CHANGED"
+          echo "$CHANGED" | grep -qE '^(backend/|mcp_servers/|requirements\.txt|docker-compose)' \
+            && echo 'orchestrator=true' >> $GITHUB_OUTPUT || echo 'orchestrator=false' >> $GITHUB_OUTPUT
+          echo "$CHANGED" | grep -qE '^(frontend/|requirements\.txt|docker-compose)' \
+            && echo 'frontend=true' >> $GITHUB_OUTPUT || echo 'frontend=false' >> $GITHUB_OUTPUT
+
+      - name: Compute image coordinates
+        id: meta
+        run: |
+          # GHCR requires a lowercase repository path; github.repository may not be.
+          echo "repo=ghcr.io/$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')" >> $GITHUB_OUTPUT
+          echo "tag=${{ github.sha }}" >> $GITHUB_OUTPUT
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}   # auto-provided, no setup needed
+
+      # Both images are tagged with the commit SHA and with 'latest'. The deploy
+      # pulls by SHA so it can never race with a newer push mid-deploy; 'latest'
+      # exists so an unchanged image still resolves on the next deploy.
+      - name: Build and push orchestrator
+        if: steps.changed.outputs.orchestrator == 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: backend/Dockerfile
+          push: true
+          tags: |
+            ${{ steps.meta.outputs.repo }}/orchestrator:${{ github.sha }}
+            ${{ steps.meta.outputs.repo }}/orchestrator:latest
+          cache-from: type=gha,scope=orchestrator
+          cache-to: type=gha,scope=orchestrator,mode=max
+
+      - name: Build and push frontend
+        if: steps.changed.outputs.frontend == 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: frontend/Dockerfile
+          push: true
+          tags: |
+            ${{ steps.meta.outputs.repo }}/frontend:${{ github.sha }}
+            ${{ steps.meta.outputs.repo }}/frontend:latest
+          cache-from: type=gha,scope=frontend
+          cache-to: type=gha,scope=frontend,mode=max
+
+      # An image that was not rebuilt has no tag for this SHA, so the deploy's
+      # `docker compose pull` would 404. Re-tag latest → this SHA without a build.
+      - name: Re-tag unchanged images to this SHA
+        run: |
+          for svc in orchestrator frontend; do
+            case "$svc" in
+              orchestrator) BUILT='${{ steps.changed.outputs.orchestrator }}' ;;
+              frontend)     BUILT='${{ steps.changed.outputs.frontend }}' ;;
+            esac
+            if [ "$BUILT" != 'true' ]; then
+              echo "$svc unchanged — re-tagging latest to ${{ github.sha }}"
+              docker buildx imagetools create \
+                --tag ${{ steps.meta.outputs.repo }}/$svc:${{ github.sha }} \
+                ${{ steps.meta.outputs.repo }}/$svc:latest
+            fi
+          done
+
   deploy:
     name: Write .env → git pull → docker compose up
     runs-on: ubuntu-latest
+    needs: build
 
     steps:
       - name: Checkout
@@ -138,6 +245,15 @@ jobs:
           # ── Background scheduler ──────────────────────────────────────────────
           UPDATE_INTERVAL_MINUTES=15
           BULK_DOWNLOAD_HOUR=2
+
+          # ── Image coordinates (consumed by docker-compose-gcp.yml) ───────────
+          # compose interpolates ${IMAGE_REPO}/${IMAGE_TAG} into the `image:` keys
+          # and reads this .env from the project directory automatically. Without
+          # these two lines compose falls back to its defaults and tries to pull
+          # marketmesh/orchestrator:local, which exists nowhere. IMAGE_REPO is
+          # already lowercased by the build job — GHCR rejects uppercase paths.
+          IMAGE_REPO=${{ needs.build.outputs.image_repo }}
+          IMAGE_TAG=${{ needs.build.outputs.image_tag }}
           ENVEOF
           chmod 600 /opt/marketmesh/.env
           echo ".env written ($(wc -l < /opt/marketmesh/.env) lines)"
@@ -192,48 +308,28 @@ jobs:
                # Group change takes effect on next login; use sudo for this session.
                sudo usermod -aG docker \"\$(whoami)\" 2>/dev/null || true
 
-               # ── Prune stopped containers + dangling images (keep build cache) ──
-               # docker system prune -f also wipes the build cache, making every
-               # run a cold rebuild (~40 min). Targeted pruning keeps the cache so
-               # subsequent deploys reuse CACHED layers and finish in ~3-5 min.
+               # ── Prune stopped containers + dangling images ────────────────
+               # No build cache to protect any more (images are built on the
+               # runner), but keep this targeted rather than `system prune -f`
+               # so pulled images in use are not removed.
                sudo docker container prune -f
                sudo docker image prune -f
                echo 'Disk after prune:' && df -h /
 
-               # ── Smart selective rebuild ───────────────────────────────────
-               # Rebuilding the orchestrator image on e2-micro takes 20-25 min
-               # (layer export to HDD dominates). Skip if no backend files changed.
-               PREV=\$(git rev-parse HEAD~1 2>/dev/null || echo '')
-               BUILD_ORCHESTRATOR=yes
-               BUILD_FRONTEND=yes
-               if [ -n \"\$PREV\" ]; then
-                 CHANGED=\$(git diff --name-only \$PREV HEAD)
-                 echo \"Changed files:\"; echo \"\$CHANGED\"
-                 echo \"\$CHANGED\" | grep -qE '^(backend/|mcp_servers/|requirements\\.txt|docker-compose)' \
-                   && BUILD_ORCHESTRATOR=yes || BUILD_ORCHESTRATOR=no
-                 echo \"\$CHANGED\" | grep -qE '^(frontend/|docker-compose)' \
-                   && BUILD_FRONTEND=yes || BUILD_FRONTEND=no
-               fi
-
-               # ── Build containers (only what changed) ─────────────────────
-               # --progress=plain streams layer output so SSH stays alive on slow builds.
-               if [ \"\$BUILD_ORCHESTRATOR\" = 'yes' ]; then
-                 echo 'Building orchestrator (backend/mcp_servers changed)...'
-                 sudo docker compose --progress=plain -f docker-compose-gcp.yml build orchestrator
-               else
-                 echo 'Orchestrator unchanged — skipping rebuild.'
-               fi
-               if [ \"\$BUILD_FRONTEND\" = 'yes' ]; then
-                 echo 'Building frontend...'
-                 sudo docker compose --progress=plain -f docker-compose-gcp.yml build frontend
-               else
-                 echo 'Frontend unchanged — skipping rebuild.'
-               fi
+               # ── Pull prebuilt images from GHCR ────────────────────────────
+               # Images are built on the GitHub runner and pushed to GHCR by the
+               # `build` job, so nothing is compiled here. Building on this
+               # e2-micro took 20-25 min (40 cold); pulling takes ~2 min. Both
+               # images are tagged with this commit SHA — the build job re-tags
+               # unchanged ones so the pull always resolves. Repo is public, so
+               # no registry login is needed. -E preserves IMAGE_REPO/IMAGE_TAG
+               # through sudo for compose interpolation.
+               sudo -E docker compose -f docker-compose-gcp.yml pull
 
                # ── Start orchestrator only ───────────────────────────────────
                # Frontend depends_on is service_started so compose up won't block
                # on the health check; we manage that ourselves below.
-               sudo docker compose -f docker-compose-gcp.yml up -d orchestrator
+               sudo -E docker compose -f docker-compose-gcp.yml up -d orchestrator
 
                # ── Wait for orchestrator to become healthy (up to 8 min) ─────
                echo 'Waiting for orchestrator health...'
@@ -250,9 +346,30 @@ jobs:
                done
 
                # ── Start frontend (orchestrator already healthy) ──────────────
-               sudo docker compose -f docker-compose-gcp.yml up -d frontend
+               sudo -E docker compose -f docker-compose-gcp.yml up -d frontend
 
-               sudo docker compose -f docker-compose-gcp.yml ps
+               sudo -E docker compose -f docker-compose-gcp.yml ps
+
+               # ── Remove superseded images ──────────────────────────────────
+               # Every deploy pulls a NEW commit-SHA tag, so the previous image
+               # keeps its own tag and never becomes dangling — the `image prune -f`
+               # above (dangling-only) will not touch it. When the VM built locally
+               # a rebuild orphaned the old image and it was collected; pulling
+               # tagged images removes that effect, so without this the 30 GB disk
+               # fills after a handful of deploys and fails as an unrelated
+               # "no space left on device".
+               #
+               # Runs AFTER both containers are up, so -a keeps the images now in
+               # use and removes only superseded ones. Pruning before the pull
+               # would instead discard layers the new image could have reused.
+               sudo docker image prune -af
+               echo 'Disk after image cleanup:' && df -h /
+
+               # Record what we just deployed. No longer drives build decisions
+               # (the build job uses github.event.before), but keeps a record on
+               # the VM of which commit is actually running.
+               git rev-parse HEAD > .last-deployed-sha
+
                echo '=== Deploy complete: '$(date)' ==='"
         timeout-minutes: 60
 

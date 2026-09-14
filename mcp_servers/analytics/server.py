@@ -49,6 +49,7 @@ Dependencies
 
 import os
 import json
+import math
 import asyncio
 import logging
 from datetime import datetime, timedelta
@@ -485,8 +486,9 @@ async def predict_price_direction(ticker: str, exchange: str = "NASDAQ",
     Backtest accuracy typically ranges 52–56% for liquid US equities. Performance
     degrades for illiquid or less-efficient markets.
 
-    Requires ``xgboost`` and ``scikit-learn`` — returns an error dict if either
-    is not installed.
+    Requires ``xgboost`` and ``scikit-learn``, including their native
+    dependencies — XGBoost needs an OpenMP runtime (``libomp`` on macOS).
+    Returns an error dict if any of them fail to load.
 
     Args:
         ticker:       Stock ticker symbol without suffix.
@@ -507,8 +509,15 @@ async def predict_price_direction(ticker: str, exchange: str = "NASDAQ",
         from sklearn.calibration import CalibratedClassifierCV
         import warnings
         warnings.filterwarnings("ignore")
-    except ImportError:
-        return [TextContent(type="text", text=json.dumps({"error": "xgboost not installed"}))]
+    except Exception as e:
+        # Deliberately broad. A missing *package* raises ImportError, but a
+        # missing native dependency raises the library's own exception type —
+        # e.g. XGBoostError when libomp.dylib is absent on macOS (fix:
+        # `brew install libomp`). Catching only ImportError let that escape the
+        # handler entirely and turned a degradable feature into a 502.
+        log.error("predict_price_direction unavailable — ML dependency failed to load: %s", e)
+        return [TextContent(type="text", text=json.dumps(
+            {"error": f"Prediction unavailable — ML dependency failed to load: {e}"}))]
 
     try:
         hist = _fetch_ohlcv(ticker, exchange, period="5y")
@@ -689,8 +698,9 @@ async def get_sector_performance(period: str = "1mo") -> List[TextContent]:
 
     Maps each GICS sector to its SPDR ETF ticker (XLK for Technology, XLF for
     Financials, etc.) and computes start-to-end price return for the requested
-    period. Individual ETF failures are silently caught and returned as
-    ``{"performance_pct": None}``.
+    period. Individual ETF failures, and non-finite prices from yfinance, are
+    caught and returned as ``{"performance_pct": None, "latest_price": None}``
+    so the payload stays strict-JSON serializable.
 
     Args:
         period: yfinance period string — ``"1wk"``, ``"1mo"`` (default),
@@ -722,12 +732,22 @@ async def get_sector_performance(period: str = "1mo") -> List[TextContent]:
                 if not hist.empty and len(hist) >= 2:
                     start = float(hist["Close"].iloc[0])
                     end   = float(hist["Close"].iloc[-1])
-                    perf  = round((end - start) / start * 100, 2) if start else None
-                    results[sector] = {"etf": etf, "performance_pct": perf, "latest_price": round(end, 2)}
+                    # yfinance can hand back NaN closes (gaps, halts, bad rows).
+                    # NaN is truthy, so a bare `if start` check lets it through;
+                    # json.dumps here would emit non-standard `NaN`, which only
+                    # blows up later in FastAPI's strict allow_nan=False encoder
+                    # as a 500 at response-render time. Filter it at the source.
+                    if math.isfinite(start) and math.isfinite(end) and start != 0:
+                        perf = round((end - start) / start * 100, 2)
+                        results[sector] = {"etf": etf, "performance_pct": perf,
+                                           "latest_price": round(end, 2)}
+                    else:
+                        results[sector] = {"etf": etf, "performance_pct": None,
+                                           "latest_price": None}
                 else:
-                    results[sector] = {"etf": etf, "performance_pct": None}
+                    results[sector] = {"etf": etf, "performance_pct": None, "latest_price": None}
             except Exception:
-                results[sector] = {"etf": etf, "performance_pct": None}
+                results[sector] = {"etf": etf, "performance_pct": None, "latest_price": None}
 
         return [TextContent(type="text", text=json.dumps({
             "period":  period,

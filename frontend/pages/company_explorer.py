@@ -239,7 +239,7 @@ with c2:
                             format_func=lambda x: EXCHANGE_SHORT_NAMES.get(x, x))
 with c3:
     st.markdown("<br>", unsafe_allow_html=True)
-    search_btn = st.button("🔍 Search", type="primary", use_container_width=True)
+    search_btn = st.button("🔍 Search", type="primary", width='stretch')
 
 # ── Placeholder ───────────────────────────────────────────────────────────────
 if not (search_btn and ticker_input.strip()):
@@ -481,7 +481,7 @@ def _ai_analysis_section(ticker: str, exchange: str):
         return s.strip()
 
     st.markdown("### 🤖 AI Market Analysis")
-    st.caption("Powered by Groq (llama-3.1-8b-instant) with Gemini fallback · Cached 24h")
+    st.caption("Powered by Groq (openai/gpt-oss-20b) with Gemini fallback · Cached 24h")
 
     # Regenerate button — placed FIRST so it can clear cache before the fetch below runs
     _, col_regen = st.columns([5, 1])
@@ -740,7 +740,7 @@ with tab_fin:
                 yaxis=dict(range=[0, max_val * 1.4]),
                 margin=dict(t=40, b=20, l=20, r=20),
             )
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width='stretch')
 
         # Factor Exposure Radar
         st.markdown("### Factor Exposure")
@@ -780,7 +780,7 @@ with tab_fin:
             )
             fc1, fc2 = st.columns([2, 1])
             with fc1:
-                st.plotly_chart(fig_radar, use_container_width=True, key="factor_radar")
+                st.plotly_chart(fig_radar, width='stretch', key="factor_radar")
             with fc2:
                 st.markdown("**Scores (0–100)**")
                 labels = {"Value": "Cheap vs peers", "Momentum": "Recent price trend",
@@ -847,7 +847,7 @@ with tab_fin:
                     "Market Cap": mcap_str,
                 })
             peer_df = pd.DataFrame(peer_rows)
-            st.dataframe(peer_df, use_container_width=True, hide_index=True)
+            st.dataframe(peer_df, width='stretch', hide_index=True)
         elif peer_data is not None:
             st.caption("No peer data found for this sector.")
         else:
@@ -1033,7 +1033,7 @@ with tab_val:
     })
 
     cross_df = pd.DataFrame(cross_rows)
-    st.dataframe(cross_df, use_container_width=True, hide_index=True)
+    st.dataframe(cross_df, width='stretch', hide_index=True)
 
     if anomaly_data and anomaly_data.get("anomalies"):
         st.markdown("### Recent Anomalies")

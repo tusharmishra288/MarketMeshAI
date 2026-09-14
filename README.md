@@ -84,7 +84,7 @@ Finnhub  yfinance yfinance yfinance yfinance    FRED API
 | MCP stdio subprocesses | Each server owns one domain; failures are isolated. The orchestrator runs in degraded mode if one server fails — never a full crash. |
 | L1 in-memory cache only | TTL dict in the orchestrator process. Fast, zero dependencies. Sufficient for the e2-micro single-process deployment pattern. |
 | Firestore for persistence | Schema-free, zero-ops, generous free tier (1 GB / 50 K reads / 20 K writes per day). Works with GCP ADC — no credentials file needed on the VM. Falls back to in-memory when `GCP_PROJECT_ID` is not set. |
-| Dual-LLM (Groq → Gemini) | Groq `llama-3.1-8b-instant` is sub-200 ms on the free tier. Gemini 2.0 Flash activates automatically on Groq timeout (>15 s) or rate limit. |
+| Dual-LLM (Groq → Gemini) | Groq `openai/gpt-oss-20b` is fast on the on-demand tier. Gemini 3.6 Flash activates automatically on Groq timeout (>15 s), rate limit, or empty output. |
 | GitHub Actions-only deployment | A service account key in GitHub Secrets authenticates the workflow, which provisions infrastructure, derives SSH keys, writes `.env`, and runs `docker compose` — entirely from the browser. |
 
 ---
@@ -118,8 +118,8 @@ Finnhub  yfinance yfinance yfinance yfinance    FRED API
 | Technical analysis | `ta` library (RSI, MACD, Bollinger Bands, ATR, EMA/SMA) |
 | Anomaly detection | `sklearn.ensemble.IsolationForest` |
 | Factor analysis | statsmodels 0.14 |
-| AI — primary | Groq `llama-3.1-8b-instant` |
-| AI — fallback | Google Gemini 2.0 Flash |
+| AI — primary | Groq `openai/gpt-oss-20b` (reasoning_effort="low") |
+| AI — fallback | Google Gemini 3.6 Flash (`google-genai` SDK) |
 | Data — equities | yfinance (global EOD + fundamentals), Finnhub (real-time US) |
 | Data — enrichment | Alpha Vantage OVERVIEW + SYMBOL_SEARCH |
 | Data — news | Marketaux → yfinance.news → DuckDuckGo (cascade fallback) |
@@ -363,13 +363,13 @@ L1 cache (3600 s) → yfinance .info → Alpha Vantage OVERVIEW (P/E, ROE, EPS l
 ### AI Company Summary
 ```
 L1 cache (24 h) → parallel fetch fundamentals+quote+news+technicals
-  → Groq llama-3.1-8b-instant (timeout 15 s)
-  → Google Gemini 2.0 Flash (auto-fallback on timeout or rate limit)
+  → Groq openai/gpt-oss-20b (timeout 15 s)
+  → Google Gemini 3.6 Flash (auto-fallback on timeout or rate limit)
 ```
 
 ### Macro Indicators
 ```
-Each FRED series (UNRATE, UMCSENT, NAPM) fetched independently.
+Each FRED series (UNRATE, UMCSENT, INDPRO) fetched independently.
 One series failing does not block the others — partial data is returned.
 ```
 
@@ -378,8 +378,10 @@ One series failing does not block the others — partial data is returned.
 ## AI & ML Components
 
 ### Dual-LLM AI Analysis
-- **Primary:** Groq `llama-3.1-8b-instant` — sub-200 ms, 30 req/min free tier
-- **Fallback:** Google Gemini 2.0 Flash — activates on timeout (>15 s) or HTTP 429
+- **Primary:** Groq `openai/gpt-oss-20b` — a reasoning model, so calls set
+  `reasoning_effort="low"`; without it reasoning tokens consume the completion
+  budget and the model returns empty content or invalid JSON
+- **Fallback:** Google Gemini 3.6 Flash — activates on timeout (>15 s), HTTP 429, or empty Groq output
 - **Output:** `summary`, `technical_view`, `risks` (3 bullets), `sentiment_context`, `model_used`, `generated_at`
 - **Cache:** 24 h per ticker — overridable via the "🔄 Regenerate" button
 

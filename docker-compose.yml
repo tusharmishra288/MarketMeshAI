@@ -33,8 +33,11 @@ services:
       - stocknet
     restart: unless-stopped
     healthcheck:
+      # Must parse the body, not just check that the request succeeds: /health
+      # returns HTTP 200 even when status is "degraded", so a bare urlopen()
+      # passes with dead MCP servers. Kept in sync with docker-compose-gcp.yml.
       test: ["CMD", "python", "-c",
-             "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+             "import urllib.request,json,sys; d=json.load(urllib.request.urlopen('http://localhost:8000/health')); sys.exit(0 if d['status']=='healthy' else 1)"]
       interval: 30s
       timeout: 10s
       start_period: 90s

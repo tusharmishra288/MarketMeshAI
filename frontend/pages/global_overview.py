@@ -45,7 +45,7 @@ with col_title:
     st.markdown("Real-time status across 31 exchanges in 26 countries")
 with col_refresh:
     st.markdown("<br>", unsafe_allow_html=True)
-    if st.button("🔄 Refresh", use_container_width=True):
+    if st.button("🔄 Refresh", width='stretch'):
         st.rerun()
 
 with st.expander("📋 Operational Guide"):
@@ -228,7 +228,7 @@ with c1:
     )
     fig.update_traces(textposition="outside")
     fig.update_layout(showlegend=False, coloraxis_showscale=False)
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width='stretch')
 
 with c2:
     fig = px.pie(
@@ -237,7 +237,7 @@ with c2:
         hole=0.4,
     )
     fig.update_traces(textinfo="percent+label")
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width='stretch')
 
 st.markdown("---")
 
@@ -295,7 +295,7 @@ if corr_data and not corr_data.get("error") and corr_data.get("matrix"):
             margin=dict(t=20, b=20, l=80, r=20),
             xaxis=dict(tickangle=-30),
         )
-        st.plotly_chart(fig_corr, use_container_width=True)
+        st.plotly_chart(fig_corr, width='stretch')
         st.caption(
             "Blue = highly correlated (move together) · Red = inversely correlated · "
             "Based on last 30 trading days · Source: yfinance"
@@ -327,13 +327,18 @@ if sector_data and sector_data.get("sectors"):
     sectors = sector_data["sectors"]
     period  = sector_data.get("period", "1mo")
 
-    sec_df = pd.DataFrame([
-        {"Sector": name, "Return (%)": info.get("performance_pct", 0)}
+    # Build the rows first and check for emptiness *before* sorting: sorting an
+    # empty DataFrame raises KeyError because it has no columns to sort on.
+    # Every sector can legitimately be None (yfinance hiccup, or a period with
+    # no usable closes), so this is a reachable state, not a defensive branch.
+    sec_rows = [
+        {"Sector": name, "Return (%)": info["performance_pct"]}
         for name, info in sectors.items()
         if info.get("performance_pct") is not None
-    ]).sort_values("Return (%)", ascending=True)
+    ]
 
-    if not sec_df.empty:
+    if sec_rows:
+        sec_df = pd.DataFrame(sec_rows).sort_values("Return (%)", ascending=True)
         bar_colors = ["#26a69a" if v >= 0 else "#ef5350" for v in sec_df["Return (%)"]]
         fig_sec = go.Figure(go.Bar(
             x=sec_df["Return (%)"],
@@ -349,8 +354,13 @@ if sector_data and sector_data.get("sectors"):
             xaxis_title="Return (%)",
             margin=dict(t=10, b=20, l=20, r=80),
         )
-        st.plotly_chart(fig_sec, use_container_width=True)
+        st.plotly_chart(fig_sec, width='stretch')
         st.caption(f"Period: {period} · Source: yfinance")
+    else:
+        st.info(
+            "Sector performance unavailable — no usable ETF returns came back "
+            "from the data source. This is usually transient; try refreshing."
+        )
 else:
     st.info("Sector performance data loading… (requires analytics MCP server)")
 

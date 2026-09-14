@@ -94,3 +94,10 @@ dump.rdb
 *.orig
 *.out
 .claude
+
+# ── Deploy state (VM-local) ───────────────────────────────────────
+# Written on the VM by deploy-gcp.yml to record the last successfully deployed
+# commit. Must stay untracked — it is per-machine state, and `git reset --hard`
+# leaves untracked files alone, which is what lets it survive each deploy.
+.last-deployed-sha
+INTERVIEW_PREP.md

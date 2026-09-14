@@ -245,7 +245,7 @@ with qc2:
     )
 with qc3:
     st.markdown("<br>", unsafe_allow_html=True)
-    search_btn = st.button("Get Quote", type="primary", use_container_width=True)
+    search_btn = st.button("Get Quote", type="primary", width='stretch')
 
 
 @st.fragment(run_every=30)

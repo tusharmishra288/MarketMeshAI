@@ -48,6 +48,19 @@ SERVERS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__fil
 _sessions:       Dict[str, ClientSession] = {}
 _session_status: Dict[str, str]           = {}
 
+# Consecutive failed watchdog pings per region. Reset to 0 on any success.
+_watchdog_strikes: Dict[str, int] = {}
+
+# A ping must fail this many cycles in a row before a region is called dead.
+# MCP stdio servers process requests serially, so a ping issued while a long
+# tool call is running queues behind it and times out even though the server is
+# perfectly healthy. One strike is not evidence of death.
+_WATCHDOG_STRIKES_BEFORE_DEAD = 3
+
+# Per-ping timeout. Generous because the slow path is a busy server, not a
+# dead one — a dead subprocess fails immediately rather than timing out.
+_WATCHDOG_TIMEOUT_S = 30
+
 
 async def _start_mcp_server(region: str, stack: AsyncExitStack) -> ClientSession:
     """
@@ -99,8 +112,8 @@ async def mcp_call(region: str, tool: str, arguments: dict) -> dict:
     Raises:
         HTTPException 503: The MCP server for *region* is not in the session
             pool — it failed to start, timed out, or was never configured.
-        HTTPException 502: The tool returned an empty ``content`` list, which
-            indicates a protocol-level failure in the MCP server subprocess.
+        HTTPException 502: The tool returned an empty ``content`` list, flagged
+            the result as an error, or returned text that is not valid JSON.
         HTTPException 404: The tool returned a JSON payload containing an
             ``"error"`` key — e.g. ticker not found, no data available.
     """
@@ -112,12 +125,83 @@ async def mcp_call(region: str, tool: str, arguments: dict) -> dict:
         raise HTTPException(status_code=502, detail=f"Empty response from {region} MCP")
     # MCP tools always return a list of TextContent objects. The first element's
     # ``.text`` attribute contains the JSON string produced by the tool handler.
-    data = json.loads(result.content[0].text)
+    raw = result.content[0].text
+
+    # An exception escaping a tool handler is caught by the MCP SDK, which sets
+    # isError and puts the plain-text message in content — not JSON. Without
+    # this check json.loads() below turns every such failure into an opaque
+    # JSONDecodeError, discarding the actual reason.
+    if getattr(result, "isError", False):
+        log.error("[MCP] %s.%s raised: %s", region, tool, raw)
+        raise HTTPException(status_code=502,
+                            detail=f"{region}.{tool} failed: {raw}")
+
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        # Malformed output that was not flagged as an error — e.g. a library
+        # writing to stdout, which is the stdio transport itself.
+        log.error("[MCP] %s.%s returned non-JSON output: %r", region, tool, raw[:500])
+        raise HTTPException(status_code=502,
+                            detail=f"{region}.{tool} returned malformed output")
+
     if "error" in data:
         # Tool-level errors (e.g. "No data for AAPL") become HTTP 404 so the
         # frontend can distinguish "server down" (503) from "not found" (404).
         raise HTTPException(status_code=404, detail=data["error"])
     return data
+
+
+async def _ping_region(region: str, timeout_s: int) -> None:
+    """
+    Ping one MCP session and update its status and strike count.
+
+    Failure is classified by exception type, because the two failure modes are
+    not equally ambiguous:
+
+    - ``TimeoutError`` — the ping was accepted but no reply arrived in time.
+      MCP stdio servers are serial, so this is the signature of a server busy
+      with a long tool call just as often as a hung one. Ambiguous, so it
+      takes ``_WATCHDOG_STRIKES_BEFORE_DEAD`` in a row to count as death.
+    - Any other exception — a transport-level error (closed pipe, broken
+      resource, "Connection closed"). The subprocess is gone; a live server,
+      however busy, queues the request rather than dropping the pipe. Not
+      ambiguous, so the region is marked dead on the first occurrence.
+
+    Args:
+        region:    Region key to ping.
+        timeout_s: Seconds to wait for ``list_tools()`` before counting a strike.
+    """
+    session = _sessions.get(region)
+    if session is None:
+        return
+    try:
+        await asyncio.wait_for(session.list_tools(), timeout=timeout_s)
+        if _session_status.get(region) != "connected":
+            log.info("[MCP watchdog] %s recovered → connected", region)
+        _session_status[region]   = "connected"
+        _watchdog_strikes[region] = 0
+    except TimeoutError as exc:
+        # Ambiguous — could be a busy server. Require repeated strikes.
+        # repr(), not str() — TimeoutError stringifies to "", which is why the
+        # original log line read "session dead: " with nothing after it.
+        strikes = _watchdog_strikes.get(region, 0) + 1
+        _watchdog_strikes[region] = strikes
+        if strikes >= _WATCHDOG_STRIKES_BEFORE_DEAD:
+            _session_status[region] = "timeout"
+            log.warning("[MCP watchdog] %s unresponsive after %d consecutive "
+                        "timed-out pings: %r", region, strikes, exc)
+        else:
+            log.info("[MCP watchdog] %s ping %d/%d timed out (server likely "
+                     "busy): %r", region, strikes, _WATCHDOG_STRIKES_BEFORE_DEAD, exc)
+    except Exception as exc:
+        # Unambiguous — the pipe to the subprocess is broken. Fail fast.
+        # "error" rather than "timeout" mirrors the lifespan startup handler,
+        # which distinguishes the same two cases the same way.
+        _watchdog_strikes[region] = _WATCHDOG_STRIKES_BEFORE_DEAD
+        _session_status[region]   = "error"
+        log.warning("[MCP watchdog] %s transport failed — subprocess gone: %r",
+                    region, exc)
 
 
 async def mcp_watchdog(regions: List[str], interval_s: int = 60) -> None:
@@ -133,10 +217,27 @@ async def mcp_watchdog(regions: List[str], interval_s: int = 60) -> None:
     without this watchdog. The Docker health check reads ``_session_status`` via
     ``/health``, so a stale "connected" entry hides the failure from Docker.
 
+    Avoiding false positives
+    ------------------------
+    MCP stdio servers handle one request at a time. A ping sent while a long
+    tool call is in flight sits in the queue and times out, which previously
+    marked a healthy server dead on a single strike — flipping ``/health`` to
+    degraded and potentially triggering an unnecessary container restart.
+    Three safeguards prevent that without slowing down real crash detection:
+
+    - Regions are pinged concurrently via ``asyncio.gather``, so one slow
+      server cannot delay every region queued behind it.
+    - A *timed-out* ping is ambiguous, so it takes
+      ``_WATCHDOG_STRIKES_BEFORE_DEAD`` consecutive failures to count as death.
+    - A *transport error* is unambiguous — the subprocess is gone — so it is
+      reported on the first cycle. See ``_ping_region``.
+
     Recovery path
     -------------
-    1. Subprocess dies → watchdog detects it within *interval_s* seconds.
-    2. ``_session_status[region]`` is set to ``"timeout"``.
+    1. Subprocess dies → detected on the next cycle (within *interval_s*) if
+       the transport broke; within *interval_s* ×
+       ``_WATCHDOG_STRIKES_BEFORE_DEAD`` if it merely stopped responding.
+    2. ``_session_status[region]`` is set to ``"error"`` or ``"timeout"``.
     3. ``/health`` returns ``{"status": "degraded", ...}``.
     4. Docker health check (configured to exit 1 on degraded) marks container
        unhealthy after ``retries`` failures.
@@ -149,16 +250,10 @@ async def mcp_watchdog(regions: List[str], interval_s: int = 60) -> None:
     """
     await asyncio.sleep(interval_s)          # let startup fully settle first
     while True:
-        for region in regions:
-            session = _sessions.get(region)
-            if session is None:
-                continue
-            try:
-                await asyncio.wait_for(session.list_tools(), timeout=10)
-                if _session_status.get(region) != "connected":
-                    log.info("[MCP watchdog] %s recovered → connected", region)
-                _session_status[region] = "connected"
-            except Exception as exc:
-                _session_status[region] = "timeout"
-                log.warning("[MCP watchdog] %s session dead: %s", region, exc)
+        # gather, not a sequential for-loop: a single slow region previously
+        # delayed every region after it by up to the full ping timeout.
+        await asyncio.gather(
+            *(_ping_region(region, _WATCHDOG_TIMEOUT_S) for region in regions),
+            return_exceptions=True,
+        )
         await asyncio.sleep(interval_s)

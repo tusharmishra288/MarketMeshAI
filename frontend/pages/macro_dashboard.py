@@ -180,21 +180,45 @@ ENDPOINTS = {
     "indicators":  "indicators_data",
 }
 
-if "macro_data" not in st.session_state:
-    hard_refresh = st.session_state.pop("macro_hard_refresh", False)
-    _macro_fetch = {}
-    with st.spinner("Refreshing FRED economic data…" if hard_refresh else "Fetching FRED economic data…"):
-        for indicator in ENDPOINTS:
-            try:
-                params = {"refresh": "true"} if hard_refresh else {}
-                r = requests.get(f"{BACKEND_URL}/api/macro/{indicator}", params=params, timeout=20)
-                if r.status_code == 200:
-                    _macro_fetch[indicator] = r.json()
-            except Exception:
-                _macro_fetch[indicator] = None
-    st.session_state["macro_data"] = _macro_fetch
+@st.cache_data(ttl=900, show_spinner=False)
+def _fetch_macro(hard_refresh: bool) -> dict:
+    """
+    Fetch all five FRED macro endpoints, cached for 15 minutes.
 
-macro = st.session_state["macro_data"]
+    Replaces a ``session_state`` guard that was racy: two overlapping script
+    runs could both see the key missing and both fetch, doubling every FRED
+    call. ``st.cache_data`` locks per cache key, so a concurrent second caller
+    waits for the first result instead of issuing its own requests.
+
+    FRED series update daily at most, so a 15-minute TTL costs nothing in
+    freshness. ``hard_refresh`` is part of the cache key, so toggling it
+    bypasses the cached entry and forces a live fetch.
+
+    Args:
+        hard_refresh: Forward ``refresh=true`` to the backend, bypassing its
+            own cache as well.
+
+    Returns:
+        Dict keyed by indicator name; a value is None if that fetch failed.
+    """
+    fetched = {}
+    for indicator in ENDPOINTS:
+        try:
+            params = {"refresh": "true"} if hard_refresh else {}
+            r = requests.get(f"{BACKEND_URL}/api/macro/{indicator}", params=params, timeout=20)
+            if r.status_code == 200:
+                fetched[indicator] = r.json()
+        except Exception:
+            fetched[indicator] = None
+    return fetched
+
+
+_hard_refresh = st.session_state.pop("macro_hard_refresh", False)
+if _hard_refresh:
+    _fetch_macro.clear()
+
+with st.spinner("Refreshing FRED economic data…" if _hard_refresh else "Fetching FRED economic data…"):
+    macro = _fetch_macro(_hard_refresh)
 
 fred_configured = any(
     v and not v.get("error") for v in macro.values()
@@ -269,7 +293,7 @@ if yield_data and not yield_data.get("error"):
             margin=dict(t=20, b=20, l=20, r=20),
             showlegend=False,
         )
-        st.plotly_chart(fig_yc, use_container_width=True)
+        st.plotly_chart(fig_yc, width='stretch')
 else:
     st.info("Yield curve data unavailable — FRED_API_KEY not configured.")
 
@@ -317,7 +341,7 @@ if inflation_data and not inflation_data.get("error"):
         margin=dict(t=20, b=20, l=20, r=20),
         legend=dict(orientation="h", y=1.1),
     )
-    st.plotly_chart(fig_inf, use_container_width=True)
+    st.plotly_chart(fig_inf, width='stretch')
 else:
     st.info("Inflation data unavailable — FRED_API_KEY not configured.")
 
@@ -355,7 +379,7 @@ if fed_data and not fed_data.get("error"):
             showlegend=False,
         )
         with fr2:
-            st.plotly_chart(fig_fed, use_container_width=True)
+            st.plotly_chart(fig_fed, width='stretch')
 else:
     st.info("Fed rate data unavailable — FRED_API_KEY not configured.")
 
@@ -397,7 +421,7 @@ if gdp_data and not gdp_data.get("error"):
             margin=dict(t=20, b=20, l=20, r=20),
             showlegend=False,
         )
-        st.plotly_chart(fig_gdp, use_container_width=True)
+        st.plotly_chart(fig_gdp, width='stretch')
 else:
     st.info("GDP data unavailable — FRED_API_KEY not configured.")
 
@@ -449,7 +473,7 @@ def _macro_ai_narrative():
         return s.strip()
 
     st.markdown("## 🤖 AI Macro Analysis")
-    st.caption("Powered by Groq (llama-3.1-8b-instant) with Claude fallback · 4-hour cache")
+    st.caption("Powered by Groq (openai/gpt-oss-20b) with Gemini fallback · 4-hour cache")
 
     # Regenerate button FIRST — clears cache before fetch block below runs
     _, regen_col = st.columns([5, 1])

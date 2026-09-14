@@ -199,7 +199,7 @@ fundamentals, quote, technicals = await asyncio.gather(fund_t, quot_t, tech_t, r
 ```python
 # Groq and Gemini SDKs are synchronous — wrap in to_thread to avoid blocking
 resp = await asyncio.to_thread(
-    client.chat.completions.create, model="llama-3.1-8b-instant", ...
+    client.chat.completions.create, model="openai/gpt-oss-20b", ...
 )
 ```
 
@@ -247,7 +247,7 @@ backend/
 | US macro data | **FRED REST API** | — | 800k+ free series |
 | Company news (US) | **Marketaux** (entity-matched) | yfinance news → DuckDuckGo | 4-stage cascade |
 | Company search | **Alpha Vantage SYMBOL_SEARCH** | yfinance.Search | 40k+ global equities |
-| AI analysis | **Groq** (llama-3.1-8b-instant) | Google Gemini 2.0 Flash | Dual-LLM fallback |
+| AI analysis | **Groq** (openai/gpt-oss-20b) | Google Gemini 3.6 Flash | Dual-LLM fallback |
 
 ### Exchange suffix mapping — how global stocks work
 
@@ -432,10 +432,10 @@ All scores are normalised to 0-100 and guaranteed JSON-safe (no NaN/Inf).
 ### Dual-LLM Strategy
 
 ```
-Primary:  Groq (llama-3.1-8b-instant)
-           └─ Sub-second inference, 14,400 tokens/min free, JSON mode
+Primary:  Groq (openai/gpt-oss-20b)
+           └─ Fast inference, JSON mode, reasoning_effort="low"
            
-Fallback: Google Gemini 2.0 Flash
+Fallback: Google Gemini 3.6 Flash
            └─ Higher quality output, JSON mime type, slightly more latency
            
 Final:    Deterministic rule-based fallback
@@ -443,9 +443,14 @@ Final:    Deterministic rule-based fallback
 ```
 
 **Why Groq as primary?**
-- `llama-3.1-8b-instant` inference is typically < 500ms — fast enough for interactive use
-- Free tier: ~14,400 tokens/minute (generous for this use case)
+- `openai/gpt-oss-20b` inference is fast enough for interactive use
 - Native JSON mode (`response_format={"type": "json_object"}`) prevents markdown fences in output
+- It is a *reasoning* model, so every call sets `reasoning_effort="low"`. Reasoning
+  tokens are drawn from the same completion budget as the answer: at the original
+  `max_tokens=200` the budget was consumed before any text was emitted, so Groq
+  returned HTTP 200 with empty content and every request silently fell through to
+  Gemini. The JSON-mode calls failed more loudly, with
+  `json_validate_failed: max completion tokens reached before generating a valid document`.
 
 **Why NOT OpenAI GPT as primary?**
 - Cost: GPT-4o is ~$5-15/1M tokens vs Groq's free tier
@@ -483,7 +488,8 @@ generation_config=genai.GenerationConfig(response_mime_type="application/json")
 - `temperature=0.3` — analytical prose with slight creativity vs pure factual extraction
 
 **Macro context prompt** (key constraints):
-- Compact single-sentence FRED data summary — stays within llama-3.1-8b-instant's 8k context
+- Compact single-sentence FRED data summary — keeps the prompt small so the
+  completion budget is spent on the answer rather than the input
 - Explicitly bans `"Key: Value"` format inside text fields — forces Bloomberg-style prose
 - Constrains `risks` to exactly 3 complete sentences — consistent frontend rendering
 - `temperature` not set (uses model default) in macro route (contrast: 0.3 in company summary)

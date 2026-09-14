@@ -228,17 +228,22 @@ async def get_mena_indices(**kwargs) -> List[TextContent]:
     """
     Fetch current levels and day-change for 4 major MENA benchmark indices.
 
-    Fetches TADAWUL All Share (^TASI.SR), DFM General (^DFMGI), Tel Aviv 125
-    (^TA125.TA), and EGX 30 (^EGX30) via yfinance. Individual failures are
+    Fetches TADAWUL All Share (^TASI.SR), DFM General (DFMGI.AE), Tel Aviv 125
+    (^TA125.TA), and EGX 30 (^CASE30) via yfinance. Individual failures are
     caught and represented as ``{"value": None, "change": 0}``.
+
+    Symbol notes: Yahoo lists Dubai's index as ``DFMGI.AE`` — no caret prefix,
+    with the ``.AE`` suffix — and still uses the pre-2009 CASE name for Egypt,
+    so EGX 30 is ``^CASE30``. The intuitive ``^DFMGI`` / ``^EGX30`` forms both
+    404 against Yahoo's quoteSummary endpoint.
 
     Returns:
         List with a single TextContent containing: ``{"indices": {name: {value, change}},
         "source": "yfinance"}``.
     """
     indices = {
-        '^TASI.SR': 'TADAWUL All Share', '^DFMGI': 'DFM General',
-        '^TA125.TA': 'Tel Aviv 125',      '^EGX30': 'EGX 30',
+        '^TASI.SR': 'TADAWUL All Share', 'DFMGI.AE': 'DFM General',
+        '^TA125.TA': 'Tel Aviv 125',      '^CASE30': 'EGX 30',
     }
     try:
         results = {}

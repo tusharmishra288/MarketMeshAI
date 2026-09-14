@@ -37,6 +37,7 @@ Dependencies
 import os
 import json
 import asyncio
+import logging
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional
 import yfinance as yf
@@ -44,6 +45,13 @@ import finnhub
 
 from mcp.server import Server
 from mcp.types import Tool, TextContent
+
+# Matches the other five MCP servers. Without this the SDK's own INFO records
+# ("Processing request of type ...") are never emitted, which made americas the
+# one server invisible in the orchestrator log — including to the watchdog's
+# ping cycle, despite it being pinged like every other region.
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [americas] %(message)s")
+log = logging.getLogger(__name__)
 
 server = Server("americas-markets")
 finnhub_client = finnhub.Client(api_key=os.getenv('FINNHUB_API_KEY', ''))

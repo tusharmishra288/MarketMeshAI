@@ -23,9 +23,11 @@ Gemini SDKs are synchronous; this avoids blocking the event loop.
 
 Dependencies
 ------------
-- groq:                 Official Groq Python SDK (``pip install groq``).
-- google-generativeai:  Google Gemini SDK (``pip install google-generativeai``).
-- asyncio:              ``to_thread`` for non-blocking SDK calls.
+- groq:        Official Groq Python SDK (``pip install groq``).
+- google-genai: Unified Google Gen AI SDK (``pip install google-genai``).
+               Replaces the retired ``google-generativeai`` package, which
+               reached end of life in 2026 and no longer receives fixes.
+- asyncio:     ``to_thread`` for non-blocking SDK calls.
 """
 
 import os
@@ -45,7 +47,9 @@ async def _ai_describe_company(company_name: str, raw_description: str) -> dict:
     Prompt engineering notes:
     - Temperature 0.2 — low creativity ensures factual, stable output across
       repeated calls for the same ticker (the result is cached 7 days).
-    - max_tokens=200 — sufficient for 2-3 sentences; keeps cost and latency low.
+    - reasoning_effort="low" — gpt-oss-20b reasons before answering; low effort
+      leaves the token budget for the answer itself.
+    - max_tokens=600 — covers reasoning plus 2-3 sentences.
     - The prompt explicitly bans JSON/headings/bullets so the raw text can be
       stored and displayed directly in the UI without post-processing.
     - Raw description is truncated at 2000 chars to stay within context limits
@@ -89,7 +93,15 @@ async def _ai_describe_company(company_name: str, raw_description: str) -> dict:
                 model="openai/gpt-oss-20b",
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.2,   # low temperature → deterministic, factual
-                max_tokens=200,    # 2-3 sentences fits comfortably in 200 tokens
+                # gpt-oss-20b is a reasoning model: it spends completion tokens
+                # thinking before it emits any text. At max_tokens=200 reasoning
+                # consumed the whole budget, so Groq returned 200 OK with empty
+                # content and every call silently fell through to Gemini.
+                # reasoning_effort="low" (Groq default is "medium") keeps the
+                # thinking short for what is a summarisation task, not a
+                # reasoning one.
+                reasoning_effort="low",
+                max_tokens=600,
             )
             short_desc = resp.choices[0].message.content.strip()
             if short_desc:
@@ -100,11 +112,14 @@ async def _ai_describe_company(company_name: str, raw_description: str) -> dict:
     gemini_key = os.getenv("GEMINI_API_KEY", "")
     if gemini_key:
         try:
-            import google.generativeai as genai
-            genai.configure(api_key=gemini_key)
-            model = genai.GenerativeModel("gemini-3.6-flash")
-            # Gemini SDK is also synchronous — wrap in to_thread
-            response = await asyncio.to_thread(model.generate_content, prompt)
+            from google import genai
+            client = genai.Client(api_key=gemini_key)
+            # google-genai's sync client is still blocking — wrap in to_thread
+            response = await asyncio.to_thread(
+                client.models.generate_content,
+                model="gemini-3.6-flash",
+                contents=prompt,
+            )
             short_desc = response.text.strip()
             if short_desc:
                 return {"short_description": short_desc, "source": "gemini"}
@@ -132,7 +147,9 @@ async def _ai_company_summary(ticker: str, fundamentals: dict, quote: dict,
     Prompt engineering notes:
     - Temperature 0.3 — slightly more creative than the description prompt to
       allow nuanced analytical prose, but still grounded.
-    - max_tokens=600 — sufficient for 3-5 sentence summary + 3 risks + 2 short
+    - reasoning_effort="low" — caps reasoning tokens so the JSON body fits.
+    - max_tokens=1200 — covers reasoning plus a 3-5 sentence summary + 3 risks
+      + 2 short
       sentences. Higher would risk the fast Groq model drifting off-topic.
     - ``response_format={"type": "json_object"}`` is set for Groq so it
       strictly returns JSON without markdown fences. Gemini uses
@@ -181,7 +198,8 @@ Provide a JSON response with exactly these keys:
                 model="openai/gpt-oss-20b",
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.3,
-                max_tokens=600,
+                reasoning_effort="low",
+                max_tokens=1200,
                 response_format={"type": "json_object"},
             )
             result = json.loads(resp.choices[0].message.content)
@@ -194,17 +212,20 @@ Provide a JSON response with exactly these keys:
     gemini_key = os.getenv("GEMINI_API_KEY", "")
     if gemini_key:
         try:
-            import google.generativeai as genai
-            genai.configure(api_key=gemini_key)
+            from google import genai
+            from google.genai import types as genai_types
+            client = genai.Client(api_key=gemini_key)
             # response_mime_type="application/json" is Gemini's equivalent of Groq's
-            # json_object mode — forces the model to output valid JSON
-            model = genai.GenerativeModel(
-                "gemini-3.6-flash",
-                generation_config=genai.GenerationConfig(response_mime_type="application/json"),
-            )
+            # json_object mode — forces the model to output valid JSON.
+            # In google-genai this moves from GenerativeModel(...) into
+            # GenerateContentConfig passed per-call.
             response = await asyncio.to_thread(
-                model.generate_content,
-                prompt + "\n\nRespond with valid JSON only.",
+                client.models.generate_content,
+                model="gemini-3.6-flash",
+                contents=prompt + "\n\nRespond with valid JSON only.",
+                config=genai_types.GenerateContentConfig(
+                    response_mime_type="application/json",
+                ),
             )
             result = json.loads(response.text)
             result["model_used"]   = "gemini-3.6-flash"

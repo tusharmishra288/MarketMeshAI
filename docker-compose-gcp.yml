@@ -16,6 +16,12 @@ services:
 
   # ── FastAPI orchestrator + 6 MCP stdio subprocesses ────────────────────────
   orchestrator:
+    # Built and pushed to GHCR by GitHub Actions, then pulled here. The `build:`
+    # block is kept so `docker compose build` still works locally; the VM deploy
+    # pulls the tag instead, because building on an e2-micro takes 20-25 min
+    # (layer export to a slow disk dominates) versus ~2 min to pull.
+    # IMAGE_REPO / IMAGE_TAG come from .env; defaults keep local use working.
+    image: ${IMAGE_REPO:-marketmesh}/orchestrator:${IMAGE_TAG:-local}
     build:
       context: .
       dockerfile: backend/Dockerfile
@@ -44,6 +50,7 @@ services:
 
   # ── Streamlit frontend ──────────────────────────────────────────────────────
   frontend:
+    image: ${IMAGE_REPO:-marketmesh}/frontend:${IMAGE_TAG:-local}
     build:
       context: .
       dockerfile: frontend/Dockerfile

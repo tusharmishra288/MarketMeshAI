@@ -227,6 +227,42 @@ section[data-testid="stSidebar"] .stButton > button {
 </style>
 """, unsafe_allow_html=True)
 
+# ── Cached backend fetches ────────────────────────────────────────────────────
+# The sidebar renders on every page and Streamlit re-executes the whole script
+# on every widget interaction and page switch, so uncached requests.get() calls
+# here fire several times per user action — visible in the backend log as
+# duplicate /health and /api/watchlist pairs. Caching makes reruns free while
+# the TTL keeps the data fresh enough for a status panel.
+
+@st.cache_data(ttl=15, show_spinner=False)
+def _fetch_health():
+    """
+    Fetch backend health, cached for 15 s.
+
+    Returns:
+        Parsed /health JSON, or None if the backend returned a non-200 status.
+        Network errors propagate to the caller, which shows "Backend Offline".
+    """
+    resp = requests.get(f"{BACKEND_URL}/health", timeout=5)
+    return resp.json() if resp.status_code == 200 else None
+
+
+@st.cache_data(ttl=30, show_spinner=False)
+def _fetch_watchlist():
+    """
+    Fetch the watchlist, cached for 30 s.
+
+    Callers that mutate the watchlist must call ``_fetch_watchlist.clear()``
+    before ``st.rerun()``, otherwise the rerun reads a stale cached list and the
+    change appears not to have taken effect.
+
+    Returns:
+        List of ``{"ticker", "exchange"}`` dicts, or None on a non-200 status.
+    """
+    resp = requests.get(f"{BACKEND_URL}/api/watchlist", timeout=5)
+    return resp.json().get("watchlist", []) if resp.status_code == 200 else None
+
+
 # ── Shared sidebar (rendered on every page) ───────────────────────────────────
 with st.sidebar:
     st.title("🌐 MarketMesh AI")
@@ -246,7 +282,7 @@ with st.sidebar:
         st.markdown(
             "**Data pipeline:**\n"
             "yfinance → Finnhub → Alpha Vantage → Marketaux → FRED\n\n"
-            "**AI:** Groq (llama-3.1-8b-instant) with Gemini fallback\n\n"
+            "**AI:** Groq (openai/gpt-oss-20b) with Gemini fallback\n\n"
             "**Architecture:** FastAPI + 6 MCP stdio servers + Streamlit\n\n"
             "**Coverage:** 40,000+ companies across Americas, Europe, Asia-Pacific & MENA"
         )
@@ -255,10 +291,9 @@ with st.sidebar:
 
     # System / MCP health
     try:
-        resp = requests.get(f"{BACKEND_URL}/health", timeout=5)
-        if resp.status_code == 200:
+        health = _fetch_health()
+        if health is not None:
             st.success("✅ System Online")
-            health = resp.json()
             with st.expander("MCP Server Status"):
                 for server, status in health.get("mcp_servers", {}).items():
                     icon = "🟢" if status == "connected" else "🔴"
@@ -290,8 +325,7 @@ with st.sidebar:
     st.markdown("### ⭐ Watchlist")
 
     try:
-        wl_resp = requests.get(f"{BACKEND_URL}/api/watchlist", timeout=5)
-        watchlist = wl_resp.json().get("watchlist", []) if wl_resp.status_code == 200 else []
+        watchlist = _fetch_watchlist() or []
     except Exception:
         watchlist = []
 
@@ -309,6 +343,7 @@ with st.sidebar:
                         f"{BACKEND_URL}/api/watchlist/{item['ticker']}",
                         params={"exchange": item["exchange"]}, timeout=5,
                     )
+                    _fetch_watchlist.clear()   # invalidate cache so the rerun sees the deletion
                     st.rerun()
                 except Exception:
                     pass
@@ -322,7 +357,7 @@ with st.sidebar:
                                    ALL_EXCHANGES,
                                    format_func=lambda x: EXCHANGE_SHORT_NAMES.get(x, x),
                                    label_visibility="collapsed")
-        if st.form_submit_button("➕ Add", use_container_width=True):
+        if st.form_submit_button("➕ Add", width='stretch'):
             if wl_ticker.strip():
                 try:
                     requests.post(
@@ -330,6 +365,7 @@ with st.sidebar:
                         params={"ticker": wl_ticker.strip().upper(), "exchange": wl_exch},
                         timeout=5,
                     )
+                    _fetch_watchlist.clear()   # invalidate cache so the rerun sees the addition
                     st.rerun()
                 except Exception:
                     st.error("Could not reach backend")

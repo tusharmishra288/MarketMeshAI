@@ -1,5 +1,5 @@
 # ══════════════════════════════════════════════════════════════════════════════
-# StockPilot AI — Developer Makefile
+# Marketmesh AI — Developer Makefile
 # ══════════════════════════════════════════════════════════════════════════════
 # Usage:
 #   make install      Install all Python dependencies
@@ -27,15 +27,15 @@ install:
 
 # ── Development servers ────────────────────────────────────────────────────────
 backend:
-	@echo "🚀  Starting StockPilot AI backend (FastAPI + 6 MCP servers)…"
+	@echo "🚀  Starting MarketMesh AI backend (FastAPI + 6 MCP servers)…"
 	cd $(BACKEND_DIR) && $(PYTHON) orchestrator.py
 
 frontend:
-	@echo "🚀  Starting StockPilot AI frontend (Streamlit)…"
+	@echo "🚀  Starting MarketMesh AI frontend (Streamlit)…"
 	cd $(FRONTEND_DIR) && streamlit run app.py --server.port 8501
 
 run:
-	@echo "🚀  Starting StockPilot AI (backend + frontend in background)…"
+	@echo "🚀  Starting MarketMesh AI (backend + frontend in background)…"
 	@cd $(BACKEND_DIR) && $(PYTHON) orchestrator.py > ../backend.log 2>&1 & echo "Backend PID: $$!"
 	@sleep 15
 	@cd $(FRONTEND_DIR) && streamlit run app.py --server.port 8501 --server.headless true > ../frontend.log 2>&1 & echo "Frontend PID: $$!"
@@ -92,7 +92,7 @@ clean:
 # ── Help ──────────────────────────────────────────────────────────────────────
 help:
 	@echo ""
-	@echo "  StockPilot AI — Available make targets"
+	@echo "  MarketMesh AI — Available make targets"
 	@echo "  ───────────────────────────────────────"
 	@echo "  make install      Install Python dependencies from requirements.txt"
 	@echo "  make run          Start backend + frontend (background, logs to *.log)"

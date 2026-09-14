@@ -177,7 +177,14 @@ async def ai_macro_context(refresh: bool = False):
                 model="openai/gpt-oss-20b",
                 messages=[{"role": "user", "content": prompt}],
                 response_format={"type": "json_object"},
-                max_tokens=700,
+                # gpt-oss-20b spends completion tokens on reasoning before it
+                # emits the JSON body, and how much varies per call — at 700 it
+                # always failed, at 2000 it failed intermittently with
+                # json_validate_failed. reasoning_effort="low" caps the thinking
+                # instead of just raising the ceiling; Groq's default is
+                # "medium". This is summarisation, not a reasoning task.
+                reasoning_effort="low",
+                max_tokens=2000,
             )
             parsed = json.loads(resp.choices[0].message.content)
             result.update({k: v for k, v in parsed.items()
@@ -188,13 +195,17 @@ async def ai_macro_context(refresh: bool = False):
 
     if not result["summary"]:
         try:
-            import google.generativeai as genai
-            genai.configure(api_key=os.getenv("GEMINI_API_KEY", ""))
-            model = genai.GenerativeModel(
-                "gemini-3.6-flash",
-                generation_config=genai.GenerationConfig(response_mime_type="application/json"),
+            from google import genai
+            from google.genai import types as genai_types
+            client = genai.Client(api_key=os.getenv("GEMINI_API_KEY", ""))
+            response = await asyncio.to_thread(
+                client.models.generate_content,
+                model="gemini-3.6-flash",
+                contents=prompt,
+                config=genai_types.GenerateContentConfig(
+                    response_mime_type="application/json",
+                ),
             )
-            response = await asyncio.to_thread(model.generate_content, prompt)
             parsed   = json.loads(response.text)
             result.update({k: v for k, v in parsed.items()
                            if k in ("summary", "equity_impact", "risks", "stance")})

@@ -533,7 +533,7 @@ if _vol_available:
 
 # Unique key forces Plotly to fully re-mount when any toggle changes
 _chart_key = f"mc_{int(show_sma20)}{int(show_sma50)}{int(show_sma200)}{int(show_bb)}{int(_vol_available)}"
-st.plotly_chart(fig, use_container_width=True, key=_chart_key)
+st.plotly_chart(fig, width='stretch', key=_chart_key)
 
 # ── RSI + MACD sub-panels (computed from candle data) ────────────────────────
 tc1, tc2 = st.columns(2)
@@ -571,7 +571,7 @@ with tc1:
             xaxis=_grid,
             showlegend=False,
         )
-        st.plotly_chart(fig_rsi, use_container_width=True)
+        st.plotly_chart(fig_rsi, width='stretch')
         latest_rsi = float(rsi_clean.iloc[-1])
         if latest_rsi > 70:
             st.warning(f"RSI {latest_rsi:.1f} — **Overbought** (may pull back)")
@@ -617,7 +617,7 @@ with tc2:
             yaxis=_grid,
             xaxis=_grid,
         )
-        st.plotly_chart(fig_macd, use_container_width=True)
+        st.plotly_chart(fig_macd, width='stretch')
     else:
         st.caption("MACD unavailable (insufficient history)")
 
@@ -663,7 +663,7 @@ if pred_data and not pred_data.get("error"):
         xaxis=dict(range=[0, 100], title="Confidence %"),
         showlegend=False,
     )
-    st.plotly_chart(fig_conf, use_container_width=True)
+    st.plotly_chart(fig_conf, width='stretch')
 
     # Plain-English model interpretation
     conf_pct   = confidence * 100
@@ -712,7 +712,7 @@ if pred_data and not pred_data.get("error"):
                 xaxis=dict(gridcolor="rgba(255,255,255,0.08)"),
                 yaxis=dict(gridcolor="rgba(0,0,0,0)"),
             )
-            st.plotly_chart(fig_feat, use_container_width=True, key="feat_chart")
+            st.plotly_chart(fig_feat, width='stretch', key="feat_chart")
 
     st.warning(
         f"⚠️ **Disclaimer**: Statistical model for educational purposes only. "
