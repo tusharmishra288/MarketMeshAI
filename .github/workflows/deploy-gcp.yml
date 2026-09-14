@@ -332,7 +332,15 @@ jobs:
                sudo -E docker compose -f docker-compose-gcp.yml up -d orchestrator
 
                # ── Wait for orchestrator to become healthy (up to 8 min) ─────
+               # Note the loop can also run out while status is still 'starting':
+               # with start_period 360 s plus 5 retries at 30 s, a genuinely
+               # broken container cannot report 'unhealthy' until ~8.5 min, which
+               # is beyond this loop. Falling through on a timeout would start the
+               # frontend and report a successful deploy against a degraded
+               # backend, so the post-loop check below treats anything other than
+               # 'healthy' as a failure.
                echo 'Waiting for orchestrator health...'
+               STATUS='starting'
                for i in \$(seq 1 48); do
                  STATUS=\$(sudo docker inspect --format='{{.State.Health.Status}}' marketmesh_orchestrator 2>/dev/null || echo 'starting')
                  echo \"  [\$i/48] \$STATUS\"
@@ -344,6 +352,17 @@ jobs:
                  fi
                  sleep 10
                done
+
+               if [ \"\$STATUS\" != 'healthy' ]; then
+                 echo \"Orchestrator never became healthy (last status: \$STATUS).\"
+                 echo '/health body:'
+                 sudo docker exec marketmesh_orchestrator \
+                   python -c \"import urllib.request;print(urllib.request.urlopen('http://localhost:8000/health').read().decode())\" \
+                   || echo '  (could not read /health)'
+                 echo '--- orchestrator logs (last 80 lines) ---'
+                 sudo docker logs --tail=80 marketmesh_orchestrator
+                 exit 1
+               fi
 
                # ── Start frontend (orchestrator already healthy) ──────────────
                sudo -E docker compose -f docker-compose-gcp.yml up -d frontend
