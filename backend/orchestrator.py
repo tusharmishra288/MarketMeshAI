@@ -53,7 +53,10 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from helpers.mcp_client import _sessions, _session_status, _start_mcp_server, mcp_watchdog
+from helpers.mcp_client import (
+    _sessions, _session_status, mcp_watchdog,
+    start_mcp_supervisors, stop_mcp_supervisors,
+)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [orchestrator] %(message)s")
 log = logging.getLogger(__name__)
@@ -66,23 +69,23 @@ async def lifespan(app: FastAPI):
     FastAPI lifespan context manager — startup and shutdown logic.
 
     Startup sequence:
-      1. Open a shared AsyncExitStack so all MCP stdio transports share a single
-         cleanup scope (prevents resource leaks if one server fails mid-startup).
-      2. Warn about missing API keys so operators know which features are degraded.
-      3. Start each MCP server subprocess sequentially with a 120-second timeout.
+      1. Warn about missing API keys so operators know which features are degraded.
+      2. Launch one supervisor task per MCP server. Each supervisor owns its own
+         subprocess and AsyncExitStack, starts sequentially with a 120-second
+         timeout, and respawns its server automatically if it later dies.
          Servers that timeout or raise are marked "timeout"/"error" in
          _session_status but do NOT abort the rest of the startup sequence —
          the app runs in degraded mode rather than refusing to start.
-      4. Initialise the SQLite/PostgreSQL database (watchlists, alerts).
+      3. Initialise the SQLite/PostgreSQL database (watchlists, alerts).
 
     Shutdown sequence (after ``yield``):
       1. Close the database connection pool.
-      2. Tear down all MCP stdio transports via the shared AsyncExitStack.
+      2. Signal every supervisor to stop; each tears down its own stdio
+         transport inside its own task, which is the only place anyio permits
+         that cancel scope to be exited.
     """
-    stack   = AsyncExitStack()
     # Six regional/analytical servers started in declaration order
     regions = ["americas", "europe", "asia_pacific", "mena", "analytics", "economics"]
-    await stack.__aenter__()
 
     # Warn early so logs are visible before the server startup loop
     missing = [k for k in ("FINNHUB_API_KEY", "MARKETAUX_API_KEY", "ALPHA_VANTAGE_KEY")
@@ -90,39 +93,26 @@ async def lifespan(app: FastAPI):
     if missing:
         log.warning("Missing API keys: %s — some features will be degraded", missing)
 
-    for region in regions:
-        try:
-            # 120-second timeout: MCP servers spawn a Python subprocess +
-            # initialize() handshake. On a dev laptop each takes well under a
-            # second, but on an e2-micro (shared burstable vCPU, 1 GB RAM)
-            # importing pandas / numpy / yfinance takes 15-30 s each. At the
-            # previous 30 s, asia_pacific and mena timed out on every cold start,
-            # leaving /health permanently "degraded" and failing the deploy.
-            # Servers start sequentially rather than concurrently on purpose:
-            # six simultaneous numpy/pandas imports would peak past the
-            # container's 700 MB limit.
-            session = await asyncio.wait_for(_start_mcp_server(region, stack), timeout=120)
-            _sessions[region]       = session
-            _session_status[region] = "connected"
-            log.info("[MCP] %s server started", region)
-        except asyncio.TimeoutError:
-            # Server process started but did not complete initialize() in time
-            _session_status[region] = "timeout"
-            log.error("[MCP] %s server timed out after 120s — skipping", region)
-        except Exception as e:
-            # Import error, missing dependency, or port conflict in the subprocess
-            _session_status[region] = "error"
-            log.error("[MCP] %s server failed: %s", region, e)
+    # 120-second spawn timeout: MCP servers spawn a Python subprocess +
+    # initialize() handshake. On a dev laptop each takes well under a second,
+    # but on an e2-micro (shared burstable vCPU, 1 GB RAM) importing pandas /
+    # numpy / yfinance takes 15-30 s each. At 30 s, asia_pacific and mena timed
+    # out on every cold start, leaving /health permanently "degraded" and
+    # failing the deploy. Supervisors start sequentially and hold a shared spawn
+    # lock thereafter: six simultaneous numpy/pandas imports would peak past the
+    # container's 700 MB limit.
+    await start_mcp_supervisors(regions, startup_timeout_s=120)
 
     from services.database import init_db
     await init_db()
 
-    # Start background watchdog — pings each MCP session every 60 s and
-    # updates _session_status so /health reflects real liveness. When a
-    # subprocess dies the status flips to "timeout", the Docker health check
-    # detects "degraded", and the VM cron restarts the container within 5 min.
+    # Start background watchdog — pings each MCP session every 60 s and updates
+    # _session_status so /health reflects real liveness. When a subprocess dies
+    # the watchdog now also wakes that region's supervisor, which respawns it in
+    # place; a container restart is only the backstop if respawning keeps
+    # failing.
     watchdog_task = asyncio.create_task(mcp_watchdog(regions, interval_s=60))
-    log.info("[MCP watchdog] started (interval=60s)")
+    log.info("[MCP watchdog] started (interval=60s, auto-respawn enabled)")
 
     yield  # Application runs here — request handlers are live
 
@@ -134,8 +124,8 @@ async def lifespan(app: FastAPI):
 
     from services.database import close_db
     await close_db()
-    # AsyncExitStack tears down all stdio transports in LIFO order
-    await stack.__aexit__(None, None, None)
+    # Each supervisor closes its own stdio transport inside its own task
+    await stop_mcp_supervisors()
 
 
 # ── App ───────────────────────────────────────────────────────────────────────

@@ -61,6 +61,39 @@ _WATCHDOG_STRIKES_BEFORE_DEAD = 3
 # dead one — a dead subprocess fails immediately rather than timing out.
 _WATCHDOG_TIMEOUT_S = 30
 
+# ── Supervisor state ──────────────────────────────────────────────────────────
+# Each region runs under its own long-lived supervisor task that owns that
+# subprocess's AsyncExitStack.
+#
+# This structure is not incidental. The MCP stdio transport is built on anyio
+# task groups, and entering a cancel scope in one task while exiting it in
+# another raises "Attempted to exit cancel scope in a different task than it
+# was entered in". Previously every subprocess was entered into a single
+# AsyncExitStack owned by the FastAPI lifespan task, which meant the watchdog
+# — running in its own task — could not tear a dead server down even though it
+# could detect one. One supervisor task per region, owning both the enter and
+# the exit, is what makes automatic respawn safe.
+_supervisors:    Dict[str, asyncio.Task]  = {}
+_restart_events: Dict[str, asyncio.Event] = {}
+_ready_events:   Dict[str, asyncio.Event] = {}
+_shutdown = asyncio.Event()
+
+# True only while a region's supervisor is actively spawning a replacement.
+# ``mcp_call`` waits on this so a respawn shows up as a slow request rather
+# than a failed one — but only then. A region sitting dead in backoff is False,
+# so requests fail fast instead of every caller blocking for the full timeout.
+_respawning: Dict[str, bool] = {}
+
+# Serialises spawns. Six simultaneous pandas/numpy/yfinance imports peak past
+# the container's 700 MB limit on an e2-micro, so only one server may start at
+# a time — during initial startup and during any later respawn.
+_spawn_lock = asyncio.Lock()
+
+# Backoff between respawn attempts, indexed by consecutive failure count and
+# held at the final value. A server that fails on every start (a missing native
+# dependency, say) must not spin retrying forever.
+_RESPAWN_BACKOFF_S = (5, 15, 60, 300)
+
 
 async def _start_mcp_server(region: str, stack: AsyncExitStack) -> ClientSession:
     """
@@ -91,6 +124,205 @@ async def _start_mcp_server(region: str, stack: AsyncExitStack) -> ClientSession
     return session
 
 
+def _request_restart(region: str) -> None:
+    """
+    Signal the supervisor for *region* to tear down and respawn its subprocess.
+
+    Called by the watchdog when a region is judged dead. Deliberately does no
+    teardown itself — only the owning supervisor task may close the stack (see
+    the cancel-scope note at the top of this module). Safe to call repeatedly;
+    a restart already pending is left alone.
+
+    Args:
+        region: Region key whose supervisor should restart it.
+    """
+    ev = _restart_events.get(region)
+    if ev is None:
+        # No supervisor — the process is shutting down, or the region was never
+        # registered. Nothing to do.
+        return
+    if not ev.is_set():
+        log.warning("[MCP] %s marked dead — requesting respawn", region)
+        ev.set()
+
+
+async def _wait_for_restart_or_shutdown(region: str) -> None:
+    """
+    Block until this region is asked to restart or the app is shutting down.
+
+    Holding here is what keeps the region's AsyncExitStack open for the life of
+    a healthy subprocess: returning from this call is the signal to tear down.
+
+    Args:
+        region: Region key to wait on.
+    """
+    restart  = asyncio.create_task(_restart_events[region].wait())
+    shutdown = asyncio.create_task(_shutdown.wait())
+    try:
+        await asyncio.wait({restart, shutdown}, return_when=asyncio.FIRST_COMPLETED)
+    finally:
+        for task in (restart, shutdown):
+            if not task.done():
+                task.cancel()
+
+
+async def _supervise_region(region: str, startup_timeout_s: int) -> None:
+    """
+    Own one region's subprocess for the life of the app: spawn it, publish its
+    session, hold it open, and respawn it whenever it dies.
+
+    Every ``AsyncExitStack`` enter and exit happens inside this one task, which
+    is what makes teardown of a dead transport safe (see the module-level note
+    on anyio cancel scopes).
+
+    Loop:
+      1. Acquire ``_spawn_lock`` and start the subprocess, bounded by
+         *startup_timeout_s*.
+      2. On success publish the session into ``_sessions``, mark the region
+         connected, and reset the failure counters.
+      3. Block until the watchdog requests a restart or the app shuts down.
+      4. Tear the stack down, suppressing teardown errors — if the subprocess
+         is already gone, a broken pipe on close is expected, not a problem.
+      5. Back off and loop.
+
+    Args:
+        region:            Region key to supervise.
+        startup_timeout_s: Seconds allowed for spawn + ``initialize()``.
+    """
+    failures = 0
+
+    while not _shutdown.is_set():
+        _restart_events[region].clear()
+        _respawning[region] = True     # callers may wait for this attempt
+        stack = AsyncExitStack()
+        started = False
+        try:
+            await stack.__aenter__()
+            # One spawn at a time, process-wide — see _spawn_lock.
+            async with _spawn_lock:
+                session = await asyncio.wait_for(
+                    _start_mcp_server(region, stack), timeout=startup_timeout_s)
+            _sessions[region]         = session
+            _session_status[region]   = "connected"
+            _watchdog_strikes[region] = 0
+            _respawning[region]       = False
+            started  = True
+            failures = 0
+            log.info("[MCP] %s server started", region)
+            _ready_events[region].set()
+
+            # Hold the subprocess open. Returning here means "tear down now".
+            await _wait_for_restart_or_shutdown(region)
+            if not _shutdown.is_set():
+                log.info("[MCP] %s tearing down dead session before respawn", region)
+
+        except asyncio.TimeoutError:
+            _session_status[region] = "timeout"
+            log.error("[MCP] %s server timed out after %ds", region, startup_timeout_s)
+        except asyncio.CancelledError:
+            _shutdown.set()
+            raise
+        except Exception as exc:
+            _session_status[region] = "error"
+            log.error("[MCP] %s server failed: %s", region, exc)
+        finally:
+            # Drop the session first so mcp_call returns a clean 503 rather than
+            # dispatching onto a transport that is being torn down.
+            _sessions.pop(region, None)
+            # Unblock startup even when the first attempt failed, so one bad
+            # server cannot stall the whole boot sequence.
+            _ready_events[region].set()
+            try:
+                await stack.aclose()
+            except Exception as exc:
+                # Expected when the subprocess is already gone: closing a broken
+                # pipe raises. There is nothing left to clean up, so log at debug
+                # and let the respawn proceed rather than killing the supervisor.
+                log.debug("[MCP] %s teardown raised (subprocess already gone): %r",
+                          region, exc)
+
+        if _shutdown.is_set():
+            break
+
+        if started:
+            # This server had been running fine and died once. Respawn straight
+            # away and keep _respawning set, so in-flight callers wait out the
+            # gap instead of seeing it. Backoff exists for servers that cannot
+            # start at all, not for a one-off death.
+            _respawning[region] = True
+            log.info("[MCP] %s respawning immediately", region)
+            continue
+
+        failures += 1
+        # Backoff is not "about to be available", so stop making callers wait.
+        _respawning[region] = False
+        delay = _RESPAWN_BACKOFF_S[min(failures - 1, len(_RESPAWN_BACKOFF_S) - 1)]
+        log.info("[MCP] %s respawn attempt %d failed — retrying in %ds",
+                 region, failures, delay)
+        try:
+            await asyncio.wait_for(_shutdown.wait(), timeout=delay)
+            break                      # shutdown arrived during backoff
+        except asyncio.TimeoutError:
+            pass                       # backoff elapsed — try again
+
+    log.info("[MCP] %s supervisor stopped", region)
+
+
+async def start_mcp_supervisors(regions: List[str], startup_timeout_s: int = 120) -> None:
+    """
+    Launch one supervisor task per region and wait for each first attempt.
+
+    Regions are brought up one at a time: the next supervisor is not started
+    until the previous has reported ready (or failed), which preserves the
+    sequential memory profile the e2-micro needs. A region that never reports
+    is left to its supervisor and startup continues, so one bad server degrades
+    the app rather than blocking it.
+
+    Args:
+        regions:           Region keys to supervise, in startup order.
+        startup_timeout_s: Seconds allowed per spawn.
+    """
+    _shutdown.clear()
+    for region in regions:
+        _restart_events[region] = asyncio.Event()
+        _ready_events[region]   = asyncio.Event()
+        _supervisors[region]    = asyncio.create_task(
+            _supervise_region(region, startup_timeout_s), name=f"mcp-supervisor-{region}")
+        try:
+            # +30 s over the spawn timeout so this waiter never fires before the
+            # supervisor's own timeout has had a chance to classify the failure.
+            await asyncio.wait_for(_ready_events[region].wait(),
+                                   timeout=startup_timeout_s + 30)
+        except asyncio.TimeoutError:
+            log.error("[MCP] %s did not report ready — continuing startup", region)
+
+
+async def stop_mcp_supervisors() -> None:
+    """
+    Signal every supervisor to shut down and wait for them to tear down cleanly.
+
+    Each supervisor closes its own stack in its own task, which is the only
+    place that teardown is safe. Supervisors that do not exit promptly are
+    cancelled — the process is going away regardless.
+    """
+    _shutdown.set()
+    for region in list(_supervisors):
+        ev = _restart_events.get(region)
+        if ev is not None:
+            ev.set()                   # wake a supervisor parked on the hold
+    for region, task in list(_supervisors.items()):
+        try:
+            await asyncio.wait_for(asyncio.shield(task), timeout=30)
+        except (asyncio.TimeoutError, asyncio.CancelledError):
+            log.warning("[MCP] %s supervisor did not stop in time — cancelling", region)
+            task.cancel()
+        except Exception as exc:
+            log.warning("[MCP] %s supervisor exited with error: %r", region, exc)
+    _supervisors.clear()
+    _restart_events.clear()
+    _ready_events.clear()
+
+
 async def mcp_call(region: str, tool: str, arguments: dict) -> dict:
     """
     Call a tool on the named MCP server and return the parsed JSON response.
@@ -117,10 +349,24 @@ async def mcp_call(region: str, tool: str, arguments: dict) -> dict:
         HTTPException 404: The tool returned a JSON payload containing an
             ``"error"`` key — e.g. ticker not found, no data available.
     """
-    session = _sessions.get(region)
-    if session is None:
-        raise HTTPException(status_code=503, detail=f"MCP server '{region}' unavailable")
-    result = await session.call_tool(tool, arguments)
+    session = await _acquire_session(region)
+
+    try:
+        result = await session.call_tool(tool, arguments)
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        # A transport error on a live request is the earliest possible evidence
+        # that the subprocess has died — up to a full watchdog cycle sooner than
+        # the next ping would notice. Trigger the respawn now so the following
+        # request has a working server, instead of waiting out the cycle.
+        _session_status[region] = "error"
+        _request_restart(region)
+        log.warning("[MCP] %s.%s transport error — respawn requested: %r",
+                    region, tool, exc)
+        raise HTTPException(status_code=503,
+                            detail=f"MCP server '{region}' is restarting — retry shortly")
+
     if not result.content:
         raise HTTPException(status_code=502, detail=f"Empty response from {region} MCP")
     # MCP tools always return a list of TextContent objects. The first element's
@@ -150,6 +396,49 @@ async def mcp_call(region: str, tool: str, arguments: dict) -> dict:
         # frontend can distinguish "server down" (503) from "not found" (404).
         raise HTTPException(status_code=404, detail=data["error"])
     return data
+
+
+async def _acquire_session(region: str, max_wait_s: float = 45.0) -> ClientSession:
+    """
+    Return the live session for *region*, briefly waiting out a respawn.
+
+    A healthy region returns immediately. If the supervisor is mid-spawn, this
+    waits for it rather than failing — a restart then costs the caller latency
+    instead of an error, which is the difference between "the app healed itself"
+    and "the page broke". A region that is dead but *not* currently spawning
+    (sitting in backoff) raises straight away, so a persistently broken server
+    cannot pile up blocked requests.
+
+    Args:
+        region:     Region key to resolve.
+        max_wait_s: Ceiling on the wait. Slightly over the e2-micro's observed
+                    15-30 s spawn so a slow respawn still succeeds.
+
+    Returns:
+        A live ``ClientSession``.
+
+    Raises:
+        HTTPException 503: No session, and none is on its way.
+    """
+    session = _sessions.get(region)
+    if session is not None:
+        return session
+
+    loop     = asyncio.get_running_loop()
+    deadline = loop.time() + max_wait_s
+    waited   = False
+    while _respawning.get(region) and loop.time() < deadline:
+        waited = True
+        await asyncio.sleep(0.5)
+        session = _sessions.get(region)
+        if session is not None:
+            log.info("[MCP] %s became available mid-request after respawn", region)
+            return session
+
+    if waited:
+        raise HTTPException(status_code=503,
+                            detail=f"MCP server '{region}' is restarting — retry shortly")
+    raise HTTPException(status_code=503, detail=f"MCP server '{region}' unavailable")
 
 
 async def _ping_region(region: str, timeout_s: int) -> None:
@@ -191,6 +480,7 @@ async def _ping_region(region: str, timeout_s: int) -> None:
             _session_status[region] = "timeout"
             log.warning("[MCP watchdog] %s unresponsive after %d consecutive "
                         "timed-out pings: %r", region, strikes, exc)
+            _request_restart(region)
         else:
             log.info("[MCP watchdog] %s ping %d/%d timed out (server likely "
                      "busy): %r", region, strikes, _WATCHDOG_STRIKES_BEFORE_DEAD, exc)
@@ -202,6 +492,7 @@ async def _ping_region(region: str, timeout_s: int) -> None:
         _session_status[region]   = "error"
         log.warning("[MCP watchdog] %s transport failed — subprocess gone: %r",
                     region, exc)
+        _request_restart(region)
 
 
 async def mcp_watchdog(regions: List[str], interval_s: int = 60) -> None:
@@ -238,11 +529,18 @@ async def mcp_watchdog(regions: List[str], interval_s: int = 60) -> None:
        the transport broke; within *interval_s* ×
        ``_WATCHDOG_STRIKES_BEFORE_DEAD`` if it merely stopped responding.
     2. ``_session_status[region]`` is set to ``"error"`` or ``"timeout"``.
-    3. ``/health`` returns ``{"status": "degraded", ...}``.
-    4. Docker health check (configured to exit 1 on degraded) marks container
-       unhealthy after ``retries`` failures.
-    5. VM cron watchdog runs ``docker compose restart orchestrator`` within 5 min.
-    6. Container restarts → lifespan re-spawns all MCP subprocesses → recovered.
+    3. ``_request_restart()`` wakes that region's supervisor, which tears the
+       dead transport down and spawns a replacement subprocess. A healthy
+       respawn flips the region back to ``"connected"`` on its own, usually
+       within seconds, so the app self-heals without an external restart.
+    4. Only if the respawn keeps failing does the region stay non-connected.
+       ``/health`` then reports ``degraded``, the Docker health check exits 1,
+       and the VM cron restarts the container — the backstop, no longer the
+       primary recovery mechanism.
+
+    Restarting the whole container was previously the *only* way a dead
+    subprocess came back, which is why regions showed as error or offline at
+    arbitrary times long after startup.
 
     Args:
         regions:    List of region keys to watch (same order as lifespan startup).
