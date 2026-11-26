@@ -81,7 +81,7 @@ Finnhub  yfinance yfinance yfinance yfinance    FRED API
 
 | Decision | Rationale |
 |---|---|
-| MCP stdio subprocesses | Each server owns one domain; failures are isolated. The orchestrator runs in degraded mode if one server fails — never a full crash. |
+| MCP stdio subprocesses | Each server owns one domain; failures are isolated. The orchestrator runs in degraded mode if one server fails — never a full crash — and a per-region supervisor respawns the dead subprocess in place, usually within seconds. |
 | L1 in-memory cache only | TTL dict in the orchestrator process. Fast, zero dependencies. Sufficient for the e2-micro single-process deployment pattern. |
 | Firestore for persistence | Schema-free, zero-ops, generous free tier (1 GB / 50 K reads / 20 K writes per day). Works with GCP ADC — no credentials file needed on the VM. Falls back to in-memory when `GCP_PROJECT_ID` is not set. |
 | Dual-LLM (Groq → Gemini) | Groq `openai/gpt-oss-20b` is fast on the on-demand tier. Gemini 3.6 Flash activates automatically on Groq timeout (>15 s), rate limit, or empty output. |
@@ -140,7 +140,7 @@ multi-region-stock-ai/
 │   ├── orchestrator.py            # FastAPI entry point; lifespan MCP startup; router registration
 │   ├── Dockerfile
 │   ├── helpers/
-│   │   ├── mcp_client.py          # _sessions pool, mcp_call() dispatcher, 30 s init timeout
+│   │   ├── mcp_client.py          # _sessions pool, mcp_call() dispatcher, per-region supervisors (auto-respawn), watchdog
 │   │   ├── cache_helpers.py       # _mem_cache dict, _mem_get(), _mem_set() — L1 TTL cache
 │   │   ├── market_helpers.py      # EXCHANGE_REGION map, _market_status(), _get_region()
 │   │   ├── enrichment.py          # _enrich_with_alpha_vantage(), _compute_factors()
@@ -328,6 +328,10 @@ Full interactive docs: `http://localhost:8000/docs`
 ## MCP Servers
 
 Each server is a standalone Python process in `mcp_servers/<name>/server.py`, launched at startup via MCP stdio transport. A failed server is marked `"timeout"` or `"error"` in `/health` but does not abort startup — the app continues in degraded mode.
+
+**Self-healing.** Every region runs under its own supervisor task that owns that subprocess's `AsyncExitStack`. When a server dies, the watchdog (or the next request that hits it) wakes its supervisor, which tears down the dead transport and spawns a replacement — no container restart required. A server that had been healthy respawns immediately; one that cannot start at all backs off 5 s → 15 s → 60 s → 300 s so it never spins. Requests arriving mid-respawn wait for the new session rather than failing, while a server sitting in backoff returns 503 straight away instead of blocking callers.
+
+The per-region supervisor is what makes this possible: the MCP stdio transport is built on anyio task groups, so a cancel scope must be exited by the same task that entered it. With one shared exit stack owned by the FastAPI lifespan, the watchdog could detect a dead server but never replace it.
 
 | Server | Exchanges | Key Tools | Data Sources |
 |---|---|---|---|
