@@ -21,6 +21,12 @@ services:
     build:
       context: .
       dockerfile: backend/Dockerfile
+      args:
+        # Dependencies live in a prebuilt base image (backend/Dockerfile.base).
+        # :latest is fine for local builds; CI passes the exact hash-tagged base.
+        # If this pull fails locally, build the base first:
+        #   docker build -f backend/Dockerfile.base -t <repo>/orchestrator-base:latest .
+        BASE_IMAGE: ${BASE_IMAGE:-ghcr.io/tusharmishra288/stockpilotai/orchestrator-base:latest}
     container_name: marketmesh_orchestrator
     ports:
       - "8000:8000"

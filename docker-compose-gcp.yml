@@ -25,6 +25,11 @@ services:
     build:
       context: .
       dockerfile: backend/Dockerfile
+      args:
+        # Only used if someone builds on the VM by hand — CI builds on the runner
+        # and the VM normally just pulls. Dependencies come from the prebuilt
+        # base image (backend/Dockerfile.base).
+        BASE_IMAGE: ${BASE_IMAGE:-ghcr.io/tusharmishra288/stockpilotai/orchestrator-base:latest}
     container_name: marketmesh_orchestrator
     ports:
       - "8000:8000"

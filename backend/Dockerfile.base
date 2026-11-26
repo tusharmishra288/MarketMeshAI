@@ -1,0 +1,33 @@
+# Orchestrator BASE image — OS packages + Python dependencies only. No app code.
+#
+# Why this exists
+# ---------------
+# The dependency layer is ~1 GB (pandas, numpy, xgboost, scikit-learn). When it
+# is rebuilt, its digest changes, so the e2-micro cannot reuse what it already
+# has and must download and extract the whole thing onto a slow pd-standard
+# disk — the "Extracting" step that dominated deploys.
+#
+# Previously that layer lived in backend/Dockerfile and was kept stable only by
+# the GitHub Actions layer cache. GHA evicts cache entries after 7 days, so for
+# a project touched every few weeks EVERY deploy was a cold one: pip reinstalled,
+# the digest changed, and the VM re-pulled ~1 GB to ship a one-line code edit.
+#
+# Splitting it out moves the cache from GHA (expires) to GHCR (does not). The
+# build job tags this image with a hash of requirements.txt and only rebuilds
+# when that hash changes. backend/Dockerfile then starts FROM this image and
+# adds only source code, so a code-only deploy pulls a few hundred KB.
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# System deps:
+#   curl     — health-check fallback
+#   libgomp1 — OpenMP runtime required by xgboost. The python:*-slim images do
+#              not ship it and pip does not pull it in, so predict_price_direction
+#              fails at import with "libgomp.so.1: cannot open shared object file".
+#              Same failure as a missing libomp.dylib on macOS.
+RUN apt-get update && apt-get install -y --no-install-recommends curl libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt

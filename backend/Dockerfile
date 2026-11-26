@@ -1,22 +1,20 @@
-FROM python:3.11-slim
+# Orchestrator APP image — source code only, layered on the prebuilt base.
+#
+# OS packages and pip install live in backend/Dockerfile.base, published to
+# GHCR and tagged with a hash of requirements.txt. That keeps the ~1 GB
+# dependency layer's digest stable across deploys, so the e2-micro reports
+# "Already exists" instead of re-extracting it for a code-only change.
+#
+# BASE_IMAGE is supplied by the deploy workflow as the exact hash-tagged base.
+# The :latest default is for local `docker compose build`; CI never relies on it,
+# because :latest can lag behind requirements.txt.
+ARG BASE_IMAGE=ghcr.io/tusharmishra288/stockpilotai/orchestrator-base:latest
+FROM ${BASE_IMAGE}
 
 # Build context must be the project root (set in docker-compose.yml)
-# This lets us copy requirements.txt and mcp_servers/ which sit at the root.
+# This lets us copy mcp_servers/ which sits at the root.
 
 WORKDIR /app
-
-# System deps:
-#   curl     — health-check fallback
-#   libgomp1 — OpenMP runtime required by xgboost. The python:*-slim images do
-#              not ship it and pip does not pull it in, so predict_price_direction
-#              fails at import with "libgomp.so.1: cannot open shared object file".
-#              Same failure as a missing libomp.dylib on macOS.
-RUN apt-get update && apt-get install -y --no-install-recommends curl libgomp1 \
-    && rm -rf /var/lib/apt/lists/*
-
-# Install Python dependencies
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy MCP server scripts.
 # The orchestrator spawns these as stdio subprocesses; they must be present

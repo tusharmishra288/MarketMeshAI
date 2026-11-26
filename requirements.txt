@@ -1,7 +1,17 @@
-# Core Dependencies
+# Backend / orchestrator image dependencies ONLY.
+#
+# The Streamlit UI has its own frontend/requirements.txt — do not add UI
+# packages here. Everything in this file lands in the orchestrator image, which
+# the e2-micro has to download and extract on every dependency change, so an
+# unused package here costs real deploy minutes.
+#
+# Before adding anything, check it is actually imported:
+#   grep -rn --include=*.py -wE "<package>" backend mcp_servers
+
+# Core
 fastapi>=0.109.0
 uvicorn>=0.27.0
-pydantic>=2.7.2
+pydantic>=2.7.2          # transitively required by fastapi; pinned deliberately
 python-dotenv>=1.0.0
 
 # MCP Protocol
@@ -10,56 +20,49 @@ python-dotenv>=1.0.0
 # The six servers in mcp_servers/ are written against the 1.x decorator API.
 mcp>=1.0.0,<2.0.0
 
-# Data Sources
+# Data sources
 yfinance>=0.2.36
 finnhub-python>=2.4.19
-alpha-vantage>=2.3.1
 
-# Database
-# Firestore (GCP) — primary persistence for watchlist/alerts on GCP deployment
+# Persistence — Firestore on GCP, in-memory fallback locally
 google-cloud-firestore>=2.14.0
-# SQLAlchemy kept for any future local DB usage (not active)
-sqlalchemy>=2.0.25
 
-# Async & HTTP
-aiohttp>=3.9.1
+# HTTP
 httpx>=0.27.0
 
-# Data Processing
+# Data processing
 pandas>=2.1.4
 numpy>=1.26.3
 python-dateutil>=2.8.2
 
-# Frontend
-streamlit>=1.37.0
-plotly>=5.18.0
-pydeck>=0.8.0
-
 # AI / LLM
 groq>=0.4.0
 # google-genai replaces google-generativeai, which Google retired in 2026.
-# The old package still imports but no longer receives updates or fixes.
 google-genai>=1.0.0
 
-# Machine Learning & Prediction
+# Machine learning — predict_price_direction (analytics MCP server).
+# NOTE: xgboost needs an OpenMP runtime; backend/Dockerfile.base installs
+# libgomp1 for it. Without that it fails at import, not at call time.
 xgboost>=2.1.0,<3.0.0
 scikit-learn>=1.5.0
-shap>=0.46.0
 
-# Technical Analysis
-ta>=0.10.0
-
-# Statistical Analysis
-statsmodels>=0.14.0
-
-# Timezone support
-pytz>=2024.1
-
-# Utilities
-python-json-logger==2.0.7
-schedule==1.2.0
+# News search
 duckduckgo-search>=6.0.0
 
-# Testing (optional)
-pytest==9.0.3
-pytest-asyncio==0.23.3
+# Utilities
+pytz>=2024.1
+python-json-logger==2.0.7
+schedule==1.2.0
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Removed 2026-11 after confirming zero imports in backend/ or mcp_servers/.
+# These were inflating the orchestrator image and therefore every cold deploy:
+#   streamlit, plotly, pydeck  — frontend-only; frontend/requirements.txt has them
+#   shap, statsmodels          — never imported (shap also drags in numba+llvmlite)
+#   ta                         — indicators are computed with pandas directly;
+#                                only referenced in two frontend doc strings
+#   sqlalchemy                 — was marked "kept for future use, not active"
+#   aiohttp                    — superseded by httpx
+#   alpha-vantage              — the REST API is called directly via httpx
+#   pytest, pytest-asyncio     — no test suite exists and no CI step runs them
+# ─────────────────────────────────────────────────────────────────────────────

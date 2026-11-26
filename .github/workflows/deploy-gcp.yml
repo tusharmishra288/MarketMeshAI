@@ -38,6 +38,16 @@ on:
     branches: [main, master]
   workflow_dispatch:
 
+# Only one deploy at a time. Two runs overlapping means two runners doing
+# `git reset --hard`, `docker compose pull` and `up -d` against the same VM
+# while each waits on its own health loop — one run restarts the container out
+# from under the other's health check. Queue rather than cancel: a cancelled
+# run can leave the VM half-deployed, and a superseded deploy still has to
+# finish tearing down cleanly.
+concurrency:
+  group: deploy-gcp
+  cancel-in-progress: false
+
 jobs:
   # ── Build images on the runner, push to GHCR ─────────────────────────────
   #
@@ -46,8 +56,9 @@ jobs:
   # cold). A GitHub runner has 4 cores and an SSD, and its layer cache is not at
   # the mercy of the VM's disk pressure. The VM then only pulls (~2 min).
   #
-  # Change detection: paths-filter compares against the previous commit on push
-  # (github.event.before), so a multi-commit push is covered correctly.
+  # Both images are rebuilt on every run, cached. Path-based skipping was
+  # removed: it let a stale :latest be re-tagged and deployed as a new SHA when
+  # an earlier run had not actually built. See the "Decide what changed" step.
   build:
     name: Build → push images to GHCR
     runs-on: ubuntu-latest
@@ -66,21 +77,27 @@ jobs:
       - name: Decide what changed
         id: changed
         run: |
-          # On workflow_dispatch there is no event.before — build both.
-          BEFORE='${{ github.event.before }}'
-          if [ -z "$BEFORE" ] || [ "$BEFORE" = '0000000000000000000000000000000000000000' ] \
-             || ! git cat-file -e "$BEFORE" 2>/dev/null; then
-            echo 'No usable base commit — building both images.'
-            echo 'orchestrator=true' >> $GITHUB_OUTPUT
-            echo 'frontend=true'     >> $GITHUB_OUTPUT
-            exit 0
-          fi
-          CHANGED=$(git diff --name-only "$BEFORE" ${{ github.sha }})
-          echo "Changed files:"; echo "$CHANGED"
-          echo "$CHANGED" | grep -qE '^(backend/|mcp_servers/|requirements\.txt|docker-compose)' \
-            && echo 'orchestrator=true' >> $GITHUB_OUTPUT || echo 'orchestrator=false' >> $GITHUB_OUTPUT
-          echo "$CHANGED" | grep -qE '^(frontend/|requirements\.txt|docker-compose)' \
-            && echo 'frontend=true' >> $GITHUB_OUTPUT || echo 'frontend=false' >> $GITHUB_OUTPUT
+          # Always build both images.
+          #
+          # This used to skip a build when the push touched no backend/frontend
+          # paths, falling back to re-tagging :latest as the new SHA. That is
+          # only sound if every previous push actually produced a good build.
+          # When a run is skipped, fails, or is clobbered by an overlapping run,
+          # :latest silently stays stale — and every later push that does not
+          # touch backend/ inherits that staleness, re-tags the old image, and
+          # deploys green while shipping nothing. That is exactly how the MCP
+          # auto-respawn fix reached master but never reached production.
+          #
+          # The skip was worth the risk when builds ran on the e2-micro at
+          # 20-25 min each. Now they run on a GitHub runner with a layer cache,
+          # so an unchanged image rebuilds in ~1-2 min of free CI time. Paying
+          # that every push buys back the guarantee that what is deployed is
+          # what is on master.
+          echo "Changed files since ${{ github.event.before }}:"
+          git diff --name-only '${{ github.event.before }}' ${{ github.sha }} 2>/dev/null \
+            || echo '  (no usable base commit — manual run or force push)'
+          echo 'orchestrator=true' >> $GITHUB_OUTPUT
+          echo 'frontend=true'     >> $GITHUB_OUTPUT
 
       - name: Compute image coordinates
         id: meta
@@ -88,6 +105,10 @@ jobs:
           # GHCR requires a lowercase repository path; github.repository may not be.
           echo "repo=ghcr.io/$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')" >> $GITHUB_OUTPUT
           echo "tag=${{ github.sha }}" >> $GITHUB_OUTPUT
+          # The base image is identified by the content of requirements.txt plus
+          # the base Dockerfile, so it is rebuilt only when dependencies or OS
+          # packages actually change — not on every code edit.
+          echo "base_tag=deps-$(cat requirements.txt backend/Dockerfile.base | sha256sum | cut -c1-12)" >> $GITHUB_OUTPUT
 
       - name: Set up Buildx
         uses: docker/setup-buildx-action@v3
@@ -99,15 +120,40 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}   # auto-provided, no setup needed
 
-      # Both images are tagged with the commit SHA and with 'latest'. The deploy
-      # pulls by SHA so it can never race with a newer push mid-deploy; 'latest'
-      # exists so an unchanged image still resolves on the next deploy.
+      # ── Base image: dependencies only, cached in GHCR rather than GHA ──────
+      # GHA cache entries expire after 7 days, so a project deployed every few
+      # weeks rebuilt pip every time; the ~1 GB layer got a new digest and the
+      # e2-micro re-extracted all of it to ship a one-line change. GHCR does not
+      # expire, so checking for an existing tag here makes the dependency layer
+      # stable for as long as requirements.txt is unchanged.
+      - name: Build base image if dependencies changed
+        run: |
+          BASE='${{ steps.meta.outputs.repo }}/orchestrator-base:${{ steps.meta.outputs.base_tag }}'
+          if docker buildx imagetools inspect "$BASE" >/dev/null 2>&1; then
+            echo "Base image already published for these dependencies: $BASE"
+            echo "Skipping base build — the app image will layer straight onto it."
+            exit 0
+          fi
+          echo "Dependencies changed (or first run) — building $BASE"
+          docker buildx build \
+            --file backend/Dockerfile.base \
+            --tag "$BASE" \
+            --tag '${{ steps.meta.outputs.repo }}/orchestrator-base:latest' \
+            --cache-from type=gha,scope=orchestrator-base \
+            --cache-to type=gha,scope=orchestrator-base,mode=max \
+            --push \
+            .
+
+      # App images are tagged with the commit SHA and with 'latest'. The deploy
+      # pulls by SHA so it can never race with a newer push mid-deploy.
       - name: Build and push orchestrator
         if: steps.changed.outputs.orchestrator == 'true'
         uses: docker/build-push-action@v6
         with:
           context: .
           file: backend/Dockerfile
+          build-args: |
+            BASE_IMAGE=${{ steps.meta.outputs.repo }}/orchestrator-base:${{ steps.meta.outputs.base_tag }}
           push: true
           tags: |
             ${{ steps.meta.outputs.repo }}/orchestrator:${{ github.sha }}
@@ -127,23 +173,6 @@ jobs:
             ${{ steps.meta.outputs.repo }}/frontend:latest
           cache-from: type=gha,scope=frontend
           cache-to: type=gha,scope=frontend,mode=max
-
-      # An image that was not rebuilt has no tag for this SHA, so the deploy's
-      # `docker compose pull` would 404. Re-tag latest → this SHA without a build.
-      - name: Re-tag unchanged images to this SHA
-        run: |
-          for svc in orchestrator frontend; do
-            case "$svc" in
-              orchestrator) BUILT='${{ steps.changed.outputs.orchestrator }}' ;;
-              frontend)     BUILT='${{ steps.changed.outputs.frontend }}' ;;
-            esac
-            if [ "$BUILT" != 'true' ]; then
-              echo "$svc unchanged — re-tagging latest to ${{ github.sha }}"
-              docker buildx imagetools create \
-                --tag ${{ steps.meta.outputs.repo }}/$svc:${{ github.sha }} \
-                ${{ steps.meta.outputs.repo }}/$svc:latest
-            fi
-          done
 
   deploy:
     name: Write .env → git pull → docker compose up
@@ -320,10 +349,10 @@ jobs:
                # Images are built on the GitHub runner and pushed to GHCR by the
                # `build` job, so nothing is compiled here. Building on this
                # e2-micro took 20-25 min (40 cold); pulling takes ~2 min. Both
-               # images are tagged with this commit SHA — the build job re-tags
-               # unchanged ones so the pull always resolves. Repo is public, so
-               # no registry login is needed. -E preserves IMAGE_REPO/IMAGE_TAG
-               # through sudo for compose interpolation.
+               # images are built and tagged with this commit SHA on every run,
+               # so the pull always resolves. Repo is public, so no registry
+               # login is needed. Compose reads IMAGE_REPO/IMAGE_TAG from the
+               # .env written above (env vars do not cross the ssh boundary).
                sudo -E docker compose -f docker-compose-gcp.yml pull
 
                # ── Start orchestrator only ───────────────────────────────────
