@@ -1,4 +1,0 @@
-mcp
-yfinance
-finnhub-python
-python-dotenv
